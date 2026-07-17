@@ -1,2 +1,2 @@
 # jonariver.github.io
-A page where you can easily plan your holidays
+Dein smarter Urlaubsplaner – Urlaubstage planen, Feiertage berücksichtigen und freie Zeit optimal nutzen.
