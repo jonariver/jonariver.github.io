@@ -91,6 +91,29 @@ function buildDays(year, st, xmasRule, extHolidays) {
   return days;
 }
 
+// Wandelt die von der API gelieferten Ferien-Zeiträume in eine Map
+// "m-d" -> { name, start, end } um, begrenzt auf das sichtbare Kalenderjahr.
+// Reine Datenaufbereitung – getrennt von API-Aufruf und Darstellung.
+function vacationDayMap(periods, year) {
+  const map = {};
+  if (!Array.isArray(periods)) return map;
+  for (const p of periods) {
+    if (!p || !p.start || !p.end) continue; // ungültige Einträge überspringen
+    const s = new Date(p.start), e = new Date(p.end);
+    if (isNaN(s) || isNaN(e) || e < s) continue;
+    // Auf die im Kalender sichtbaren Tage des gewählten Jahres begrenzen
+    // (Ferien über den Jahreswechsel werden so korrekt beschnitten).
+    let t = Math.max(Date.UTC(year, 0, 1), Date.UTC(s.getUTCFullYear(), s.getUTCMonth(), s.getUTCDate()));
+    const end = Math.min(Date.UTC(year, 11, 31), Date.UTC(e.getUTCFullYear(), e.getUTCMonth(), e.getUTCDate()));
+    for (; t <= end; t += DAY) {
+      const dt = new Date(t);
+      const key = `${dt.getUTCMonth()}-${dt.getUTCDate()}`;
+      if (!map[key]) map[key] = { name: p.name_cp || p.name || "Schulferien", start: s, end: e };
+    }
+  }
+  return map;
+}
+
 // Minimalbudget: Summe der Kosten aller isolierten Lücken mit Kosten <= 1 Tag.
 // Das sind die klassischen Brückentage mit maximalem Hebel:
 // 1 investierter Tag erzeugt i. d. R. 4 zusammenhängende freie Tage.
@@ -118,6 +141,8 @@ function plan(days, cfg) {
   // Manuelle Eingriffe des Nutzers per Klick im Kalender
   const ovr = cfg.overrides || {};
   const blocked = new Array(n).fill(false); // vom Nutzer entfernte Tage bleiben Arbeitstage
+  const holidayPref = cfg.schoolHolidayPreference || "neutral"; // prefer | avoid | neutral
+  const vacSet = cfg.vacationDays || {}; // m-d -> true, nur fuer die Sortierung genutzt
   const free = (j) => days[j].cost === 0 || sel[j] !== null;
 
   const spend = (j, preferOt, otCapRef) => {
@@ -252,9 +277,26 @@ function plan(days, cfg) {
     if (gaps.length === 0) break;
     // ROI-Stufe: nur die Lücken mit den geringsten Kosten kommen infrage
     const minTier = Math.min(...gaps.map((g) => Math.ceil(g.c - 1e-9)));
+    // Anteil der Ferientage einer Lücke (0..1) – nur bei aktiver Präferenz relevant
+    const vacShare = (g) => {
+      if (holidayPref === "neutral") return 0;
+      let hit = 0, tot = 0;
+      for (let k = g.s; k <= g.e; k++) { tot++; if (vacSet[`${days[k].m}-${days[k].d}`]) hit++; }
+      return tot ? hit / tot : 0;
+    };
     const tier = gaps
       .filter((g) => Math.ceil(g.c - 1e-9) === minTier)
-      .sort((a, b) => b.eff - a.eff || a.s - b.s);
+      // Bei neutral identische Sortierung wie bisher (Zusatzterm entfällt).
+      // prefer: mehr Ferientage zuerst; avoid: weniger Ferientage zuerst.
+      .sort((a, b) => {
+        if (holidayPref !== "neutral") {
+          const d = holidayPref === "prefer"
+            ? vacShare(b) - vacShare(a)
+            : vacShare(a) - vacShare(b);
+          if (Math.abs(d) > 1e-9) return d;
+        }
+        return b.eff - a.eff || a.s - b.s;
+      });
     let pick = tier.find((g) => !usedMonths.has(g.month));
     if (!pick) { usedMonths = new Set(); pick = tier[0]; } // neue Verteilrunde
     usedMonths.add(pick.month);
@@ -384,11 +426,14 @@ function Urlaubsplaner() {
   const [autoOt, setAutoOt] = useState("0");
   const [spendFirst, setSpendFirst] = useState("vac"); // "vac" | "ot"
   const [autoFrom, setAutoFrom] = useState(0); // Automatik plant ab diesem Monat (0 = Januar)
+  // Schulferien-Präferenz – gemeinsame Variable für Einfach- UND Profi-Modus
+  const [schoolHolidayPreference, setSchoolHolidayPreference] = useState("neutral"); // prefer | avoid | neutral
   // Manuelles Planen per Klick im Kalender
   const [clickMode, setClickMode] = useState("vac"); // Klick setzt "vac" | "ot"
   const [overrides, setOverrides] = useState({}); // "jahr:m-d" -> "vac" | "ot" | "none"
   const [dialogDay, setDialogDay] = useState(null); // Index des angeklickten geplanten Tags
   const [drag, setDrag] = useState(null); // { anchor, current } während einer Zieh-Auswahl
+  const [vacTip, setVacTip] = useState(null); // { text } – Ferien-Info per Antippen (mobil)
   // Einfach-/Profi-Modus: neuer UI-Modus, die Logik bleibt unverändert
   const [uiMode, setUiMode] = useState("einfach"); // "einfach" | "profi"
   const [simpleGoal, setSimpleGoal] = useState("free"); // free | blocks | short
@@ -453,6 +498,40 @@ function Urlaubsplaner() {
   }, [year, st]);
 
   const days = useMemo(() => buildDays(year, st, xmasRule, apiHolidays), [year, st, xmasRule, apiHolidays]);
+
+  // Schulferien von schulferien-api.de laden (V1: /api/v1/{jahr}/{kürzel}/).
+  // Nur Planungshinweis – fließt NICHT in die Berechnung ein.
+  // Ergebnisse werden pro Kombination aus Jahr und Bundesland zwischengespeichert.
+  const [vacations, setVacations] = useState([]); // roh geladene Zeiträume
+  const [vacStatus, setVacStatus] = useState("laedt"); // "laedt" | "ok" | "fehler"
+  const vacCache = useRef({}); // { "jahr-kürzel": periods[] } – vermeidet doppelte Aufrufe
+  useEffect(() => {
+    let ignore = false;
+    const cacheKey = `${year}-${st}`;
+    if (vacCache.current[cacheKey]) {
+      setVacations(vacCache.current[cacheKey]);
+      setVacStatus("ok");
+      return;
+    }
+    setVacStatus("laedt");
+    setVacations([]);
+    fetch(`https://schulferien-api.de/api/v1/${year}/${st}/`)
+      .then((r) => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
+      .then((json) => {
+        if (ignore) return;
+        // Nur echte Schulferien behalten; ungültige Einträge herausfiltern
+        const periods = Array.isArray(json) ? json.filter((p) => p && p.start && p.end) : [];
+        vacCache.current[cacheKey] = periods;
+        setVacations(periods);
+        setVacStatus("ok");
+      })
+      .catch(() => { if (!ignore) { setVacations([]); setVacStatus("fehler"); } });
+    return () => { ignore = true; };
+  }, [year, st]);
+
+  // Ferien-Tagesmap fürs sichtbare Jahr (beide Modi nutzen dieselben Daten)
+  const vacationDays = useMemo(() => vacationDayMap(vacations, year), [vacations, year]);
+
   const yearOverrides = useMemo(() => {
     const o = {};
     for (const [k, v] of Object.entries(overrides)) {
@@ -472,6 +551,8 @@ function Urlaubsplaner() {
       autoOt: Math.min(effAutoOt, num(ot)),
       spendFirst,
       autoFromMonth: autoFrom,
+      schoolHolidayPreference,
+      vacationDays: schoolHolidayPreference === "neutral" ? null : vacationDays,
       overrides: yearOverrides,
       blocks: blocks
         .filter((b) => num(b.len) >= 1)
@@ -482,7 +563,7 @@ function Urlaubsplaner() {
         })),
     };
     return plan(days, cfg);
-  }, [days, vac, ot, blocks, effAutoVac, effAutoOt, spendFirst, autoFrom, yearOverrides]);
+  }, [days, vac, ot, blocks, effAutoVac, effAutoOt, spendFirst, autoFrom, yearOverrides, schoolHolidayPreference, vacationDays]);
 
   // Single Source of Truth: Beide Modi nutzen dieselben States und dasselbe
   // Ergebnis. Der Einfachmodus übersetzt das gewählte Ziel direkt in die
@@ -647,6 +728,29 @@ function Urlaubsplaner() {
   const cardCls = dark ? "bg-slate-900 border border-slate-800 rounded-xl shadow-sm" : "bg-white rounded-xl shadow-sm";
   const subLabelCls = `text-xs font-semibold uppercase tracking-wide ${dark ? "text-slate-400" : "text-slate-600"}`;
 
+  // Schulferien-Präferenz – EIN Markup für beide Modi (kein doppelter Erklärtext).
+  // withHint=true zeigt zusätzlich den kurzen Hilfetext (nur im Profi-Modus nötig).
+  const schoolPrefControl = (withHint) => (
+    <div>
+      <span className={`block ${subLabelCls} mb-1`}>Wie sollen Schulferien bei deiner Planung berücksichtigt werden?</span>
+      <div className="space-y-2">
+        {[["prefer", "In den Schulferien planen"], ["avoid", "Schulferien möglichst meiden"], ["neutral", "Keine Präferenz"]].map(([k, l]) => (
+          <label key={k} className={`flex items-center gap-2 text-sm cursor-pointer ${dark ? "text-slate-300" : "text-slate-700"}`}>
+            <input type="radio" name="schoolPref" className="accent-emerald-600"
+              checked={schoolHolidayPreference === k}
+              onChange={() => setSchoolHolidayPreference(k)} />
+            <span>{l}</span>
+          </label>
+        ))}
+      </div>
+      {withHint && (
+        <p className={`mt-1 text-[11px] leading-snug ${dark ? "text-slate-400" : "text-slate-500"}`}>
+          Bestimmt, ob automatisch erzeugte Urlaubsvorschläge bevorzugt innerhalb oder außerhalb der Schulferien liegen.
+        </p>
+      )}
+    </div>
+  );
+
   // Jahreskalender – in beiden Modi identisch wiederverwendet
   const calendarSection = (
     <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
@@ -665,6 +769,7 @@ function Urlaubsplaner() {
                       const selType = result.sel[day.i];
                       const clickable = day.cost > 0;
                       const manual = yearOverrides[`${day.m}-${day.d}`];
+                      const vac = vacationDays[`${day.m}-${day.d}`]; // Schulferien an diesem Tag (oder undefined)
                       const lo = drag ? Math.min(drag.anchor, drag.current) : -1;
                       const hi = drag ? Math.max(drag.anchor, drag.current) : -1;
                       const inDrag = drag && clickable && !selType && day.i >= lo && day.i <= hi;
@@ -672,11 +777,18 @@ function Urlaubsplaner() {
                         ? clickMode === "vac" ? "ring-2 ring-emerald-500" : "ring-2 ring-sky-500"
                         : manual && manual !== "none" ? (dark ? "ring-2 ring-slate-300" : "ring-2 ring-slate-500")
                         : clickable ? "hover:ring-2 hover:ring-emerald-400" : "";
+                      // Tooltip-Text für Ferien, z. B. "Sommerferien in Bayern · 2.8.2027 bis 14.9.2027"
+                      const vacTipText = vac
+                        ? `${vac.name} in ${STATES[st]} · ${vac.start.toLocaleDateString("de-DE")} bis ${vac.end.toLocaleDateString("de-DE")}`
+                        : null;
                       return (
-                        <button key={day.i} type="button" title={dayTitle(day, selType)}
+                        <button key={day.i} type="button"
+                          title={vacTipText ? `${dayTitle(day, selType)} · ${vacTipText}` : dayTitle(day, selType)}
                           data-dayindex={day.i}
                           onClick={() => {
                             if (dragAppliedRef.current) { dragAppliedRef.current = false; return; }
+                            // Auf Touch-Geräten: Antippen eines Ferientags zeigt die Info dezent an
+                            if (vacTipText) setVacTip({ text: vacTipText }); else setVacTip(null);
                             onDayClick(day);
                           }}
                           onPointerDown={(e) => {
@@ -689,10 +801,17 @@ function Urlaubsplaner() {
                               setDrag({ anchor: day.i, current: day.i });
                             }
                           }}
-                          className={`h-7 rounded-md flex items-center justify-center text-[11px] tabular-nums select-none ${
+                          className={`relative h-7 rounded-md flex items-center justify-center text-[11px] tabular-nums select-none ${
                             clickable ? "cursor-pointer" : "cursor-default"
                           } ${ring} ${dayClass(day, selType, showWeekendHolidays, dark)}`}>
                           {day.d}
+                          {vac && (
+                            /* Schulferien: dezente Ebene – Streifen am unteren Rand in eigener Farbe (Orange),
+                               deutlich verschieden von Urlaub (grün), Feiertag (rot), Überstunden (blau),
+                               Wochenende (grau). Überschreibt die Grundfarbe der Zelle nicht. */
+                            <span aria-hidden="true"
+                              className="pointer-events-none absolute inset-x-1 bottom-0.5 h-[3px] rounded-full bg-orange-400" />
+                          )}
                         </button>
                       );
                     })}
@@ -702,6 +821,11 @@ function Urlaubsplaner() {
             })}
           </section>
   );
+
+  // Dezenter Hinweis, falls die Schulferien nicht geladen werden konnten
+  const vacNotice = vacStatus === "fehler" ? (
+    <p className="text-[11px] text-orange-500/80">Schulferien konnten derzeit nicht geladen werden.</p>
+  ) : null;
 
   return (
     <div className={`min-h-screen ${dark ? "bg-slate-950 text-slate-100" : "bg-slate-100 text-slate-900"}`} style={{ fontFeatureSettings: '"tnum"' }}>
@@ -814,7 +938,21 @@ function Urlaubsplaner() {
                 </div>
 
                 <div className="space-y-2">
-                  <p className={labelCls}>5 · Was ist dir wichtig?</p>
+                  <p className={labelCls}>5 · Wie sollen Schulferien berücksichtigt werden?</p>
+                  <div className="space-y-2">
+                    {[["prefer", "In den Schulferien planen"], ["avoid", "Schulferien möglichst meiden"], ["neutral", "Keine Präferenz"]].map(([k, l]) => (
+                      <label key={k} className={`flex items-center gap-2 text-sm cursor-pointer ${dark ? "text-slate-300" : "text-slate-700"}`}>
+                        <input type="radio" name="schoolPrefSimple" className="accent-emerald-600"
+                          checked={schoolHolidayPreference === k}
+                          onChange={() => setSchoolHolidayPreference(k)} />
+                        <span>{l}</span>
+                      </label>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="space-y-2">
+                  <p className={labelCls}>6 · Was ist dir wichtig?</p>
                   <div className="space-y-2">
                     {[["free", "Möglichst viele freie Tage"], ["blocks", "Lange Urlaubsblöcke"], ["short", "Viele Kurzurlaube"], ["custom", "Eigene Planung (Profi-Modus)"]].map(([k, l]) => (
                       <label key={k} className={`flex items-center gap-2 text-sm cursor-pointer ${dark ? "text-slate-300" : "text-slate-700"}`}>
@@ -891,6 +1029,10 @@ function Urlaubsplaner() {
                   {showSimpleCal && (
                     <div style={{ animation: "upFade .35s ease" }}>
                       {calendarSection}
+                      {vacNotice}
+                      {vacTip && (
+                        <p className="mt-1 text-[11px] text-orange-500">{vacTip.text}</p>
+                      )}
                     </div>
                   )}
                 </div>
@@ -1020,6 +1162,7 @@ function Urlaubsplaner() {
                     ))}
                   </div>
                 </div>
+                {schoolPrefControl(true)}
                 <p className={`text-[11px] leading-snug ${dark ? "text-slate-400" : "text-slate-500"}`}>
                   Start: Minimum von {fmtNum(Math.min(minBudget, num(vac)))} Tagen – nur 1-Tages-Brücken.
                   <InfoHint dark={dark} text="Mit dem Minimum kauft die Automatik ausschließlich isolierte 1-Tages-Lücken – 1 eingesetzter Tag erzeugt 4 freie Tage am Stück. Mehr Budget schaltet schrittweise 2-, 3- und 4-Tages-Lücken frei. „Ab Monat“ begrenzt nur die Automatik; Wunschblöcke und manuelle Klicks sind davon unabhängig und nutzen das volle Budget. Die Regler sind auf deine Angaben begrenzt." />
@@ -1188,6 +1331,7 @@ function Urlaubsplaner() {
                 ["bg-amber-100 border border-amber-300", "24./31.12. halber Tag"],
                 [dark ? "bg-slate-700" : "bg-slate-200", "Wochenende"],
                 [dark ? "bg-slate-800 ring-2 ring-slate-400" : "bg-white ring-2 ring-slate-500", "manuell gesetzt"],
+                ["bg-orange-400", "Schulferien"],
               ].map(([c, l]) => (
                 <span key={l} className="inline-flex items-center gap-1.5">
                   <span className={`inline-block w-3 h-3 rounded-sm ${c}`} /> {l}
@@ -1202,6 +1346,10 @@ function Urlaubsplaner() {
 
           {/* Jahreskalender */}
           {calendarSection}
+          {vacNotice}
+          {vacTip && (
+            <p className="text-[11px] text-orange-500">{vacTip.text}</p>
+          )}
 
           <p className="text-xs text-slate-400 leading-relaxed">
             Wunschblöcke zuerst, dann Brückentage streng nach Rendite.
