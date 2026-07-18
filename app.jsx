@@ -320,6 +320,52 @@ function dayTitle(day, selType) {
 }
 
 /* ------------------------------------------------------------------ */
+/* Wiederverwendbare UI-Bausteine                                      */
+/* ------------------------------------------------------------------ */
+
+/* Einklappbare Karte (Accordion) im Stil des Einfachmodus.
+   Sanfte Height- und Fade-Animation über den CSS-Grid-Trick (0fr -> 1fr). */
+function CollapsibleCard({ icon, title, open, onToggle, dark, cardCls, children }) {
+  return (
+    <section className={`${cardCls} overflow-hidden`}>
+      <button type="button" onClick={onToggle}
+        className="w-full flex items-center justify-between px-4 py-3 text-left">
+        <span className="text-sm font-bold flex items-center gap-2">
+          <span aria-hidden="true">{icon}</span> {title}
+        </span>
+        <span className={`text-[10px] transition-transform duration-300 ${open ? "rotate-90" : ""} ${dark ? "text-slate-400" : "text-slate-500"}`}>
+          ▶
+        </span>
+      </button>
+      <div className="grid transition-all duration-300 ease-in-out"
+        style={{ gridTemplateRows: open ? "1fr" : "0fr", opacity: open ? 1 : 0 }}>
+        <div className="overflow-hidden">
+          <div className="px-4 pb-4 space-y-4">{children}</div>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+/* Kleines Info-Icon: die ausführliche Erklärung erscheint erst auf Klick */
+function InfoHint({ text, dark }) {
+  const [show, setShow] = useState(false);
+  return (
+    <span className="inline">
+      <button type="button" onClick={() => setShow(!show)} title="Mehr erfahren"
+        className={`ml-1 inline-flex h-4 w-4 items-center justify-center rounded-full border text-[10px] font-bold align-middle ${
+          dark ? "border-slate-600 text-slate-400 hover:bg-slate-800" : "border-slate-300 text-slate-500 hover:bg-slate-100"
+        }`}>
+        i
+      </button>
+      {show && (
+        <span className={`mt-1 block text-[11px] leading-snug ${dark ? "text-slate-400" : "text-slate-500"}`}>{text}</span>
+      )}
+    </span>
+  );
+}
+
+/* ------------------------------------------------------------------ */
 /* App                                                                 */
 /* ------------------------------------------------------------------ */
 
@@ -330,7 +376,7 @@ function Urlaubsplaner() {
   const [st, setSt] = useState("BY");
   const [vac, setVac] = useState(30);
   const [ot, setOt] = useState(0);
-  const [xmasRule, setXmasRule] = useState("100");
+  const [xmasRule, setXmasRule] = useState("50"); // Standard: halber Urlaubstag am 24./31.12.
   const [showWeekendHolidays, setShowWeekendHolidays] = useState(true);
   const [blocks, setBlocks] = useState([]);
   // Budget der automatischen Verteilung; "" = automatisch das Minimum nutzen
@@ -343,6 +389,31 @@ function Urlaubsplaner() {
   const [overrides, setOverrides] = useState({}); // "jahr:m-d" -> "vac" | "ot" | "none"
   const [dialogDay, setDialogDay] = useState(null); // Index des angeklickten geplanten Tags
   const [drag, setDrag] = useState(null); // { anchor, current } während einer Zieh-Auswahl
+  // Einfach-/Profi-Modus: neuer UI-Modus, die Logik bleibt unverändert
+  const [uiMode, setUiMode] = useState("einfach"); // "einfach" | "profi"
+  const [simpleGoal, setSimpleGoal] = useState("free"); // free | blocks | short
+  const [simpleStarted, setSimpleStarted] = useState(false);
+  const [showSimpleCal, setShowSimpleCal] = useState(false);
+  // Eingeklappte Bereiche pro Gerät merken; Standard: mobil nur "Allgemein" offen
+  const [panels, setPanels] = useState(() => {
+    try {
+      const saved = localStorage.getItem("urlaubsplaner-panels");
+      if (saved) return JSON.parse(saved);
+    } catch (e) { /* z. B. Vorschau-Umgebungen ohne Local Storage */ }
+    const mobile = typeof window !== "undefined" && window.innerWidth < 768;
+    return { allgemein: true, regelung: !mobile, auto: !mobile, bloecke: !mobile };
+  });
+  const togglePanel = (key) => {
+    setPanels((prev) => {
+      const next = { ...prev, [key]: !prev[key] };
+      try { localStorage.setItem("urlaubsplaner-panels", JSON.stringify(next)); } catch (e) {}
+      return next;
+    });
+  };
+
+  // Beim Fokussieren eines Zahlenfelds den gesamten Wert markieren,
+  // damit der Nutzer direkt lostippen kann statt erst zu löschen
+  const selectAllOnFocus = (e) => e.target.select();
 
   const num = (v, fallback = 0) => {
     const x = parseFloat(String(v).replace(",", "."));
@@ -412,6 +483,32 @@ function Urlaubsplaner() {
     };
     return plan(days, cfg);
   }, [days, vac, ot, blocks, effAutoVac, effAutoOt, spendFirst, autoFrom, yearOverrides]);
+
+  // Single Source of Truth: Beide Modi nutzen dieselben States und dasselbe
+  // Ergebnis. Der Einfachmodus übersetzt das gewählte Ziel direkt in die
+  // gemeinsamen Einstellungen (Wunschblöcke + Auto-Budget) – dadurch ist der
+  // Profi-Modus immer korrekt vorausgefüllt und umgekehrt, und ein
+  // Moduswechsel löst keine Neuberechnung aus.
+  const applySimpleGoal = (goal) => {
+    setSimpleGoal(goal);
+    if (goal === "free") {
+      // Möglichst viele freie Tage: keine Blöcke, volles Budget für Brückentage.
+      // "9999" wird durch die bestehende Deckelung immer auf die Urlaubstage begrenzt.
+      setBlocks([]);
+      setAutoVac("9999");
+    } else if (goal === "blocks") {
+      // Lange Urlaubsblöcke: zwei große Wunschblöcke, Automatik auf Minimum ("")
+      setBlocks([{ len: 16, month: "", ot: "" }, { len: 9, month: "", ot: "" }]);
+      setAutoVac("");
+    } else if (goal === "short") {
+      // Viele Kurzurlaube: vier verlängerte Wochenenden, Rest in Brückentage
+      setBlocks([
+        { len: 4, month: "", ot: "" }, { len: 4, month: "", ot: "" },
+        { len: 4, month: "", ot: "" }, { len: 4, month: "", ot: "" },
+      ]);
+      setAutoVac("9999");
+    }
+  };
 
   const ovrKey = (day) => `${year}:${day.m}-${day.d}`;
   const dragAppliedRef = useRef(false); // unterdrückt den Klick direkt nach einer Zieh-Auswahl
@@ -550,8 +647,65 @@ function Urlaubsplaner() {
   const cardCls = dark ? "bg-slate-900 border border-slate-800 rounded-xl shadow-sm" : "bg-white rounded-xl shadow-sm";
   const subLabelCls = `text-xs font-semibold uppercase tracking-wide ${dark ? "text-slate-400" : "text-slate-600"}`;
 
+  // Jahreskalender – in beiden Modi identisch wiederverwendet
+  const calendarSection = (
+    <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+            {MONTHS.map((mName, m) => {
+              const mDays = days.filter((d) => d.m === m);
+              const lead = (mDays[0].dow + 6) % 7; // Woche beginnt Montag
+              return (
+                <div key={m} className={`${cardCls} p-3`}>
+                  <h3 className="text-sm font-bold mb-2">{mName}</h3>
+                  <div className="grid grid-cols-7 gap-1 text-center text-[10px] text-slate-400 mb-1">
+                    {["Mo","Di","Mi","Do","Fr","Sa","So"].map((w) => <span key={w}>{w}</span>)}
+                  </div>
+                  <div className="grid grid-cols-7 gap-1">
+                    {Array.from({ length: lead }).map((_, i) => <span key={`x${i}`} />)}
+                    {mDays.map((day) => {
+                      const selType = result.sel[day.i];
+                      const clickable = day.cost > 0;
+                      const manual = yearOverrides[`${day.m}-${day.d}`];
+                      const lo = drag ? Math.min(drag.anchor, drag.current) : -1;
+                      const hi = drag ? Math.max(drag.anchor, drag.current) : -1;
+                      const inDrag = drag && clickable && !selType && day.i >= lo && day.i <= hi;
+                      const ring = inDrag
+                        ? clickMode === "vac" ? "ring-2 ring-emerald-500" : "ring-2 ring-sky-500"
+                        : manual && manual !== "none" ? (dark ? "ring-2 ring-slate-300" : "ring-2 ring-slate-500")
+                        : clickable ? "hover:ring-2 hover:ring-emerald-400" : "";
+                      return (
+                        <button key={day.i} type="button" title={dayTitle(day, selType)}
+                          data-dayindex={day.i}
+                          onClick={() => {
+                            if (dragAppliedRef.current) { dragAppliedRef.current = false; return; }
+                            onDayClick(day);
+                          }}
+                          onPointerDown={(e) => {
+                            dragAppliedRef.current = false;
+                            // Zieh-Auswahl nur mit Maus/Stift – auf Touch-Geräten
+                            // bleibt Wischen dem Scrollen vorbehalten (Tippen setzt einzelne Tage)
+                            if (clickable && !selType && e.pointerType !== "touch") {
+                              e.preventDefault(); // Textauswahl unterdrücken
+                              try { e.currentTarget.releasePointerCapture(e.pointerId); } catch {}
+                              setDrag({ anchor: day.i, current: day.i });
+                            }
+                          }}
+                          className={`h-7 rounded-md flex items-center justify-center text-[11px] tabular-nums select-none ${
+                            clickable ? "cursor-pointer" : "cursor-default"
+                          } ${ring} ${dayClass(day, selType, showWeekendHolidays, dark)}`}>
+                          {day.d}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            })}
+          </section>
+  );
+
   return (
     <div className={`min-h-screen ${dark ? "bg-slate-950 text-slate-100" : "bg-slate-100 text-slate-900"}`} style={{ fontFeatureSettings: '"tnum"' }}>
+      <style>{`@keyframes upFade { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }`}</style>
       {/* Kopf */}
       <header className="bg-slate-900 text-white">
         <div className="max-w-6xl mx-auto px-4 py-6 flex flex-wrap items-end justify-between gap-4">
@@ -560,6 +714,21 @@ function Urlaubsplaner() {
               Feiertage · Brückentage · {STATES[st]}
             </p>
             <h1 className="text-3xl font-bold tracking-tight">Urlaubsplaner {year}</h1>
+          </div>
+          <div className="flex items-center gap-1 rounded-md border border-slate-600 p-1 self-start">
+            {[["einfach", "Einfach"], ["profi", "Profi"]].map(([k, l]) => (
+              <button key={k}
+                onClick={() => {
+                  setUiMode(k);
+                  // Einfachmodus bietet nur 3 Jahre an – Auswahl ggf. zurückholen
+                  if (k === "einfach" && year > currentYear + 2) setYear(currentYear);
+                }}
+                className={`rounded px-3 py-1 text-xs font-semibold transition-colors ${
+                  uiMode === k ? "bg-emerald-600 text-white" : "text-slate-300 hover:bg-slate-800"
+                }`}>
+                {l}
+              </button>
+            ))}
           </div>
           <button onClick={() => setDark(!dark)}
             className="self-start rounded-md border border-slate-600 px-2.5 py-1 text-xs font-semibold text-slate-300 hover:bg-slate-800"
@@ -576,193 +745,343 @@ function Urlaubsplaner() {
         </div>
       </header>
 
-      <main className="max-w-6xl mx-auto px-4 py-6 grid gap-6 lg:grid-cols-[320px_1fr]">
+      <main className="max-w-6xl mx-auto px-4 py-6">
+        {uiMode === "einfach" ? (
+          <div key="einfach" className="grid gap-6 lg:grid-cols-[320px_1fr]" style={{ animation: "upFade .35s ease" }}>
+            {/* Einfachmodus: kleiner Assistent – fragt nur das Nötigste ab.
+                Alle Eingaben nutzen die vorhandenen States (vac, year, st, xmasRule);
+                es gibt keine neue Berechnungslogik. */}
+            <aside className="space-y-4">
+              <section className={`${cardCls} p-5 space-y-5`}>
+                <h2 className="text-sm font-bold">Deine Planung – Schritt für Schritt</h2>
+
+                <div className="space-y-2">
+                  <p className={labelCls}>1 · Wie viele Urlaubstage hast du?</p>
+                  <div className="flex items-center gap-3">
+                    <button onClick={() => setVac(String(Math.max(0, num(vac) - 1)))}
+                      className={`w-10 h-10 rounded-md border text-lg font-bold ${dark ? "border-slate-600 text-slate-200 hover:bg-slate-800" : "border-slate-300 text-slate-700 hover:bg-slate-100"}`}>
+                      −
+                    </button>
+                    <span className="w-14 text-center text-2xl font-bold tabular-nums">{fmtNum(num(vac))}</span>
+                    <button onClick={() => setVac(String(num(vac) + 1))}
+                      className={`w-10 h-10 rounded-md border text-lg font-bold ${dark ? "border-slate-600 text-slate-200 hover:bg-slate-800" : "border-slate-300 text-slate-700 hover:bg-slate-100"}`}>
+                      +
+                    </button>
+                  </div>
+                </div>
+
+                <div className="space-y-2">
+                  <p className={labelCls}>2 · Für welches Jahr möchtest du planen?</p>
+                  {/* Immer genau drei Jahre: aktuelles Jahr, +1, +2 – aktualisiert sich selbst */}
+                  <select className={inputCls} value={year}
+                    onChange={(e) => {
+                      const y = parseInt(e.target.value, 10);
+                      setYear(y);
+                      if (y !== currentYear) setAutoFrom(0);
+                    }}>
+                    {Array.from({ length: 3 }, (_, i) => currentYear + i).map((y) => (
+                      <option key={y} value={y}>{y}</option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="space-y-2">
+                  <p className={labelCls}>3 · In welchem Bundesland arbeitest du?</p>
+                  <select className={inputCls} value={st} onChange={(e) => setSt(e.target.value)}>
+                    {Object.entries(STATES).map(([k, v]) => (
+                      <option key={k} value={k}>{v}</option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="space-y-2">
+                  <p className={labelCls}>4 · Wie gelten der 24.12. und 31.12. bei dir?</p>
+                  <div className="space-y-2">
+                    {[["100", "Ich muss jeweils einen ganzen Urlaubstag nehmen."],
+                      ["50", "Sie zählen jeweils als halber Urlaubstag."],
+                      ["0", "Ich habe an beiden Tagen frei und benötige keinen Urlaub."]].map(([k, l]) => (
+                      <label key={k} className={`flex items-start gap-2 text-sm cursor-pointer ${dark ? "text-slate-300" : "text-slate-700"}`}>
+                        <input type="radio" name="simpleXmas" className="mt-0.5 accent-emerald-600"
+                          checked={xmasRule === k} onChange={() => setXmasRule(k)} />
+                        <span>{l}</span>
+                      </label>
+                    ))}
+                  </div>
+                  <p className={`text-[11px] leading-snug ${dark ? "text-slate-500" : "text-slate-400"}`}>
+                    Viele Arbeitgeber behandeln Heiligabend und Silvester unterschiedlich. Wähle einfach die
+                    Regel aus, die für dich gilt.
+                  </p>
+                </div>
+
+                <div className="space-y-2">
+                  <p className={labelCls}>5 · Was ist dir wichtig?</p>
+                  <div className="space-y-2">
+                    {[["free", "Möglichst viele freie Tage"], ["blocks", "Lange Urlaubsblöcke"], ["short", "Viele Kurzurlaube"], ["custom", "Eigene Planung (Profi-Modus)"]].map(([k, l]) => (
+                      <label key={k} className={`flex items-center gap-2 text-sm cursor-pointer ${dark ? "text-slate-300" : "text-slate-700"}`}>
+                        <input type="radio" name="simpleGoal" className="accent-emerald-600"
+                          checked={k !== "custom" && simpleGoal === k}
+                          onChange={() => { if (k === "custom") { setUiMode("profi"); } else { applySimpleGoal(k); } }} />
+                        <span>{l}</span>
+                      </label>
+                    ))}
+                  </div>
+                </div>
+
+                <button onClick={() => { applySimpleGoal(simpleGoal); setSimpleStarted(true); }}
+                  className="w-full rounded-lg bg-emerald-600 px-4 py-3 text-sm font-bold text-white hover:bg-emerald-700">
+                  Beste Planung berechnen
+                </button>
+              </section>
+            </aside>
+
+            {/* Einfachmodus: Ergebnis */}
+            <div className="space-y-6">
+              {!simpleStarted ? (
+                <section className={`${cardCls} p-8 text-center`}>
+                  <p className={`text-sm ${dark ? "text-slate-400" : "text-slate-500"}`}>
+                    Wähle links deine Angaben und klicke auf „Beste Planung berechnen".
+                  </p>
+                </section>
+              ) : (
+                <div className="space-y-6" style={{ animation: "upFade .35s ease" }}>
+                  <section className={`${cardCls} p-6`}>
+                    <h2 className="text-sm font-bold mb-3">Deine optimale Urlaubsplanung</h2>
+                    <div className="flex flex-wrap items-center gap-x-10 gap-y-4">
+                      <div>
+                        <p className={`text-6xl font-bold tabular-nums ${dark ? "text-emerald-400" : "text-emerald-600"}`}>{totalFree}</p>
+                        <p className={`text-sm ${dark ? "text-slate-400" : "text-slate-500"}`}>freie Tage</p>
+                      </div>
+                      <div className={`text-sm space-y-1 ${dark ? "text-slate-300" : "text-slate-600"}`}>
+                        <p>+{weekdayHolidayCount} Feiertage optimal genutzt</p>
+                        <p>+{fmtNum(usedVac)} Brückentage eingesetzt</p>
+                        <p>{totalFree} freie Tage insgesamt</p>
+                      </div>
+                    </div>
+                    <p className={`mt-4 text-sm ${dark ? "text-slate-400" : "text-slate-500"}`}>
+                      Mit {fmtNum(usedVac)} von {fmtNum(num(vac))} Urlaubstagen erhältst du insgesamt {totalFree} freie Tage.
+                    </p>
+                  </section>
+
+                  <section className={`${cardCls} p-4`}>
+                    <h3 className="text-sm font-bold mb-2">Empfohlene Urlaubsblöcke</h3>
+                    {result.periods.length === 0 ? (
+                      <p className={`text-sm ${dark ? "text-slate-400" : "text-slate-500"}`}>
+                        Keine Vorschläge gefunden – erhöhe die Anzahl deiner Urlaubstage.
+                      </p>
+                    ) : (
+                      <ul className={`divide-y ${dark ? "divide-slate-800" : "divide-slate-100"}`}>
+                        {result.periods.map((p, i) => (
+                          <li key={i} className="py-2 flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 text-sm">
+                            <span className="font-medium">{fmtDate(days[p.s])} – {fmtDate(days[p.e])}</span>
+                            <span className={`tabular-nums ${dark ? "text-slate-400" : "text-slate-500"}`}>
+                              {p.len} freie Tage · {fmtNum(p.vac)} Urlaubstag{p.vac === 1 ? "" : "e"}
+                            </span>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </section>
+
+                  <button onClick={() => setShowSimpleCal(!showSimpleCal)}
+                    className={`w-full rounded-lg border px-4 py-3 text-sm font-bold ${
+                      dark ? "border-slate-600 text-slate-200 hover:bg-slate-800" : "border-slate-300 text-slate-700 hover:bg-slate-100"
+                    }`}>
+                    {showSimpleCal ? "Kalender ausblenden" : "Kalender anzeigen"}
+                  </button>
+                  {showSimpleCal && (
+                    <div style={{ animation: "upFade .35s ease" }}>
+                      {calendarSection}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
+        ) : (
+          <div key="profi" className="grid gap-6 lg:grid-cols-[320px_1fr]" style={{ animation: "upFade .35s ease" }}>
         {/* Einstellungen */}
         <aside className="space-y-4">
-          <section className={`${cardCls} p-4 space-y-3`}>
-            <h2 className="text-sm font-bold">Deine Angaben</h2>
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className={labelCls}>Jahr</label>
-                <select className={inputCls} value={year}
-                  onChange={(e) => {
-                    const y = parseInt(e.target.value, 10);
-                    setYear(y);
-                    // Für andere Jahre als das aktuelle wieder ab Januar planen
-                    if (y !== currentYear) setAutoFrom(0);
-                  }}>
-                  {Array.from({ length: 5 }, (_, i) => currentYear + i).map((y) => (
-                    <option key={y} value={y}>{y}</option>
-                  ))}
-                </select>
-              </div>
-              <div>
-                <label className={labelCls}>Bundesland</label>
-                <select className={inputCls} value={st} onChange={(e) => setSt(e.target.value)}>
-                  {Object.entries(STATES).map(([k, v]) => (
-                    <option key={k} value={k}>{v}</option>
-                  ))}
-                </select>
-              </div>
-              <div>
-                <label className={labelCls}>Urlaubstage</label>
-                <input className={inputCls} type="number" min="0" step="0.5" value={vac}
-                  onChange={(e) => setVac(e.target.value)} />
-              </div>
-              <div>
-                <label className={labelCls}>Überstundenabbau (Tage)</label>
-                <input className={inputCls} type="number" min="0" step="0.5" value={ot}
-                  onChange={(e) => setOt(e.target.value)} />
-              </div>
-            </div>
-            <div>
-              <label className={labelCls}>24.12. und 31.12. zählen als</label>
-              <select className={inputCls} value={xmasRule} onChange={(e) => setXmasRule(e.target.value)}>
-                <option value="100">voller Urlaubstag (100 %)</option>
-                <option value="50">halber Urlaubstag (50 %)</option>
-                <option value="0">frei – kein Urlaubstag (0 %)</option>
-              </select>
-            </div>
-            <label className={`flex items-start gap-2 text-sm ${dark ? "text-slate-300" : "text-slate-700"}`}>
-              <input type="checkbox" className="mt-0.5 accent-emerald-600" checked={showWeekendHolidays}
-                onChange={(e) => setShowWeekendHolidays(e.target.checked)} />
-              <span>Feiertage an Samstag/Sonntag einbeziehen (anzeigen und mitzählen)</span>
-            </label>
-            <div className={`rounded-lg border p-3 space-y-2 ${dark ? "border-emerald-900 bg-emerald-950/50" : "border-emerald-200 bg-emerald-50"}`}>
-              <div className="flex items-center justify-between">
-                <h3 className={`text-xs font-bold uppercase tracking-wide ${dark ? "text-emerald-300" : "text-emerald-800"}`}>Automatische Verteilung</h3>
-                <button onClick={() => { setAutoVac(""); setAutoOt("0"); }}
-                  className="text-[11px] font-semibold text-emerald-700 hover:underline">
-                  auf Minimum
-                </button>
-              </div>
-              <div className="space-y-3">
-                <div>
-                  <div className="flex items-baseline justify-between mb-1">
-                    <span className={subLabelCls}>Urlaubstage nutzen</span>
-                    <span className={`text-xs font-bold tabular-nums ${dark ? "text-emerald-300" : "text-emerald-800"}`}>
-                      {fmtNum(Math.min(effAutoVac, num(vac)))} / {fmtNum(num(vac))}
-                    </span>
+              <CollapsibleCard icon="📅" title="Allgemein" open={panels.allgemein}
+                onToggle={() => togglePanel("allgemein")} dark={dark} cardCls={cardCls}>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className={labelCls}>Jahr</label>
+                    <select className={inputCls} value={year}
+                      onChange={(e) => {
+                        const y = parseInt(e.target.value, 10);
+                        setYear(y);
+                        if (y !== currentYear) setAutoFrom(0);
+                      }}>
+                      {Array.from({ length: 5 }, (_, i) => currentYear + i).map((y) => (
+                        <option key={y} value={y}>{y}</option>
+                      ))}
+                    </select>
                   </div>
-                  <input type="range" className="w-full accent-emerald-600 disabled:opacity-40"
-                    min="0" max={num(vac)} step="0.5"
-                    value={Math.min(effAutoVac, num(vac))} disabled={num(vac) === 0}
-                    onChange={(e) => setAutoVac(e.target.value)} />
-                </div>
-                <div>
-                  <div className="flex items-baseline justify-between mb-1">
-                    <span className={subLabelCls}>Überstd.-Tage nutzen</span>
-                    <span className={`text-xs font-bold tabular-nums ${dark ? "text-emerald-300" : "text-emerald-800"}`}>
-                      {fmtNum(Math.min(effAutoOt, num(ot)))} / {fmtNum(num(ot))}
-                    </span>
+                  <div>
+                    <label className={labelCls}>Bundesland</label>
+                    <select className={inputCls} value={st} onChange={(e) => setSt(e.target.value)}>
+                      {Object.entries(STATES).map(([k, v]) => (
+                        <option key={k} value={k}>{v}</option>
+                      ))}
+                    </select>
                   </div>
-                  <input type="range" className="w-full accent-emerald-600 disabled:opacity-40"
-                    min="0" max={num(ot)} step="0.5"
-                    value={Math.min(effAutoOt, num(ot))} disabled={num(ot) === 0}
-                    onChange={(e) => setAutoOt(e.target.value)} />
+                  <div>
+                    <label className={labelCls}>Urlaubstage</label>
+                    <input className={inputCls} type="number" min="0" step="0.5" value={vac}
+                      onFocus={selectAllOnFocus} onChange={(e) => setVac(e.target.value)} />
+                  </div>
+                  <div>
+                    <label className={labelCls}>Überstundenabbau (Tage)</label>
+                    <input className={inputCls} type="number" min="0" step="0.5" value={ot}
+                      onFocus={selectAllOnFocus} onChange={(e) => setOt(e.target.value)} />
+                  </div>
                 </div>
-              </div>
-              <div>
-                <span className={`block ${subLabelCls} mb-1`}>
-                  Ab Monat
-                </span>
-                <select className={inputCls} value={autoFrom}
-                  onChange={(e) => setAutoFrom(parseInt(e.target.value, 10))}>
-                  {MONTHS.map((m, mi) => (
-                    <option key={mi} value={mi}>{m}</option>
-                  ))}
-                </select>
-              </div>
-              <div>
-                <span className={`block ${subLabelCls} mb-1`}>
-                  Zuerst aufbrauchen
-                </span>
-                <div className={`grid grid-cols-2 gap-1 rounded-md border p-1 ${dark ? "bg-slate-800 border-emerald-900" : "bg-white border-emerald-200"}`}>
-                  {[["vac", "Urlaubstage"], ["ot", "Überstunden"]].map(([k, l]) => (
-                    <button key={k} onClick={() => setSpendFirst(k)}
-                      className={`rounded px-2 py-1 text-xs font-semibold transition-colors ${
-                        spendFirst === k
-                          ? "bg-emerald-600 text-white"
-                          : dark ? "text-slate-300 hover:bg-slate-700" : "text-slate-600 hover:bg-emerald-100"
-                      }`}>
-                      {l}
-                    </button>
-                  ))}
-                </div>
-              </div>
-              <p className={`text-[11px] leading-snug ${dark ? "text-emerald-100/70" : "text-emerald-900/80"}`}>
-                Start ist das Minimum von {fmtNum(Math.min(minBudget, num(vac)))} Tagen: Damit kauft die Automatik
-                ausschließlich isolierte 1-Tages-Lücken – 1 eingesetzter Tag erzeugt 4 freie Tage am Stück. Mehr
-                Budget schaltet schrittweise 2-, 3- und 4-Tages-Lücken frei. „Ab Monat" begrenzt nur die Automatik –
-                das Minimum passt sich automatisch an; Wunschblöcke und manuelle Klicks sind davon unabhängig und
-                nutzen das volle Budget. Die Regler sind auf deine Angaben oben begrenzt.
-              </p>
-            </div>
-            <p className="text-[11px] text-slate-400">
-              Feiertagsquelle:{" "}
-              {apiStatus === "api" && <span className="text-emerald-600 font-semibold">feiertage-api.de (online)</span>}
-              {apiStatus === "laedt" && "wird geladen …"}
-              {apiStatus === "lokal" && "integrierte Berechnung (API nicht erreichbar)"}
-            </p>
-          </section>
+                <p className="text-[11px] text-slate-400">
+                  Feiertagsquelle:{" "}
+                  {apiStatus === "api" && <span className="text-emerald-600 font-semibold">feiertage-api.de (online)</span>}
+                  {apiStatus === "laedt" && "wird geladen …"}
+                  {apiStatus === "lokal" && "integrierte Berechnung (API nicht erreichbar)"}
+                </p>
+              </CollapsibleCard>
 
-          {/* Blöcke */}
-          <section className={`${cardCls} p-4 space-y-3`}>
-            <div className="flex items-center justify-between">
-              <h2 className="text-sm font-bold">Wunschblöcke <span className="font-normal text-slate-400">(werden priorisiert)</span></h2>
-              <button onClick={addBlock}
-                className="rounded-md bg-emerald-600 px-2.5 py-1 text-xs font-semibold text-white hover:bg-emerald-700">
-                + Block
-              </button>
-            </div>
-            {blocks.length === 0 && (
-              <p className={`text-xs ${dark ? "text-slate-400" : "text-slate-500"}`}>
-                Noch keine Blöcke. Lege fest, wie viele Tage am Stück du frei haben willst – optional mit Wunschmonat
-                und Überstundenabbau-Tagen für diesen Block.
-              </p>
-            )}
-            {blocks.map((b, i) => {
-              const r = result.blockResults[i];
-              return (
-                <div key={i} className={`rounded-lg border p-2.5 space-y-2 ${dark ? "border-slate-700" : "border-slate-200"}`}>
-                  <div className="grid grid-cols-3 gap-2">
-                    <div>
-                      <label className={labelCls}>Tage frei</label>
-                      <input className={inputCls} type="number" min="1" value={b.len}
-                        onChange={(e) => updBlock(i, { len: e.target.value })} />
+              <CollapsibleCard icon="⚙" title="Arbeitsregelung" open={panels.regelung}
+                onToggle={() => togglePanel("regelung")} dark={dark} cardCls={cardCls}>
+                <div>
+                  <label className={labelCls}>24.12. und 31.12. zählen als</label>
+                  <select className={inputCls} value={xmasRule} onChange={(e) => setXmasRule(e.target.value)}>
+                    <option value="100">voller Urlaubstag (100 %)</option>
+                    <option value="50">halber Urlaubstag (50 %)</option>
+                    <option value="0">frei – kein Urlaubstag (0 %)</option>
+                  </select>
+                </div>
+                <label className={`flex items-start gap-2 text-sm ${dark ? "text-slate-300" : "text-slate-700"}`}>
+                  <input type="checkbox" className="mt-0.5 accent-emerald-600" checked={showWeekendHolidays}
+                    onChange={(e) => setShowWeekendHolidays(e.target.checked)} />
+                  <span>Feiertage an Samstag/Sonntag einbeziehen</span>
+                </label>
+              </CollapsibleCard>
+
+              <CollapsibleCard icon="🤖" title="Automatische Planung" open={panels.auto}
+                onToggle={() => togglePanel("auto")} dark={dark} cardCls={cardCls}>
+                <div className="flex items-center justify-between">
+                  <span className={subLabelCls}>Budget der Automatik</span>
+                  <button onClick={() => { setAutoVac(""); setAutoOt("0"); }}
+                    className="text-[11px] font-semibold text-emerald-600 hover:underline">
+                    auf Minimum
+                  </button>
+                </div>
+                <div className="space-y-3">
+                  <div>
+                    <div className="flex items-baseline justify-between mb-1">
+                      <span className={subLabelCls}>Urlaubstage nutzen</span>
+                      <span className={`text-xs font-bold tabular-nums ${dark ? "text-emerald-300" : "text-emerald-800"}`}>
+                        {fmtNum(Math.min(effAutoVac, num(vac)))} / {fmtNum(num(vac))}
+                      </span>
                     </div>
-                    <div>
-                      <label className={labelCls}>Monat</label>
-                      <select className={inputCls} value={b.month} onChange={(e) => updBlock(i, { month: e.target.value })}>
-                        <option value="">egal</option>
-                        {MONTHS.map((m, mi) => (
-                          <option key={mi} value={mi}>{m}</option>
-                        ))}
-                      </select>
-                    </div>
-                    <div>
-                      <label className={labelCls}>Überstd.-Tage</label>
-                      <input className={inputCls} type="number" min="0" step="0.5" placeholder="0" value={b.ot}
-                        onChange={(e) => updBlock(i, { ot: e.target.value })} />
-                    </div>
+                    <input type="range" className="w-full accent-emerald-600 disabled:opacity-40"
+                      min="0" max={num(vac)} step="0.5"
+                      value={Math.min(effAutoVac, num(vac))} disabled={num(vac) === 0}
+                      onChange={(e) => setAutoVac(e.target.value)} />
                   </div>
-                  <div className="flex items-center justify-between">
-                    <p className="text-xs">
-                      {r?.placed ? (
-                        <span className="text-emerald-700">
-                          {fmtDate(days[r.start])} – {fmtDate(days[r.end])} · kostet {fmtNum(r.cost)} Tage
-                        </span>
-                      ) : (
-                        <span className="text-rose-600">Keine Platzierung möglich (Budget oder Monat prüfen)</span>
-                      )}
-                    </p>
-                    <button onClick={() => delBlock(i)} className="text-xs text-slate-400 hover:text-rose-600">Entfernen</button>
+                  <div>
+                    <div className="flex items-baseline justify-between mb-1">
+                      <span className={subLabelCls}>Überstd.-Tage nutzen</span>
+                      <span className={`text-xs font-bold tabular-nums ${dark ? "text-emerald-300" : "text-emerald-800"}`}>
+                        {fmtNum(Math.min(effAutoOt, num(ot)))} / {fmtNum(num(ot))}
+                      </span>
+                    </div>
+                    <input type="range" className="w-full accent-emerald-600 disabled:opacity-40"
+                      min="0" max={num(ot)} step="0.5"
+                      value={Math.min(effAutoOt, num(ot))} disabled={num(ot) === 0}
+                      onChange={(e) => setAutoOt(e.target.value)} />
                   </div>
                 </div>
-              );
-            })}
-          </section>
-        </aside>
+                <div>
+                  <span className={`block ${subLabelCls} mb-1`}>Ab Monat</span>
+                  <select className={inputCls} value={autoFrom}
+                    onChange={(e) => setAutoFrom(parseInt(e.target.value, 10))}>
+                    {MONTHS.map((m, mi) => (
+                      <option key={mi} value={mi}>{m}</option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <span className={`block ${subLabelCls} mb-1`}>Zuerst aufbrauchen</span>
+                  <div className={`grid grid-cols-2 gap-1 rounded-md border p-1 ${dark ? "bg-slate-800 border-slate-600" : "bg-white border-slate-200"}`}>
+                    {[["vac", "Urlaubstage"], ["ot", "Überstunden"]].map(([k, l]) => (
+                      <button key={k} onClick={() => setSpendFirst(k)}
+                        className={`rounded px-2 py-1 text-xs font-semibold transition-colors ${
+                          spendFirst === k
+                            ? "bg-emerald-600 text-white"
+                            : dark ? "text-slate-300 hover:bg-slate-700" : "text-slate-600 hover:bg-slate-100"
+                        }`}>
+                        {l}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <p className={`text-[11px] leading-snug ${dark ? "text-slate-400" : "text-slate-500"}`}>
+                  Start: Minimum von {fmtNum(Math.min(minBudget, num(vac)))} Tagen – nur 1-Tages-Brücken.
+                  <InfoHint dark={dark} text="Mit dem Minimum kauft die Automatik ausschließlich isolierte 1-Tages-Lücken – 1 eingesetzter Tag erzeugt 4 freie Tage am Stück. Mehr Budget schaltet schrittweise 2-, 3- und 4-Tages-Lücken frei. „Ab Monat“ begrenzt nur die Automatik; Wunschblöcke und manuelle Klicks sind davon unabhängig und nutzen das volle Budget. Die Regler sind auf deine Angaben begrenzt." />
+                </p>
+              </CollapsibleCard>
+
+              <CollapsibleCard icon="⭐" title="Wunschblöcke" open={panels.bloecke}
+                onToggle={() => togglePanel("bloecke")} dark={dark} cardCls={cardCls}>
+                <div className="flex items-center justify-between">
+                  <span className={`text-xs ${dark ? "text-slate-400" : "text-slate-500"}`}>werden priorisiert</span>
+                  <button onClick={addBlock}
+                    className="rounded-md bg-emerald-600 px-2.5 py-1 text-xs font-semibold text-white hover:bg-emerald-700">
+                    + Block
+                  </button>
+                </div>
+                {blocks.length === 0 && (
+                  <p className={`text-xs ${dark ? "text-slate-400" : "text-slate-500"}`}>
+                    Noch keine Blöcke – lege fest, wie viele Tage am Stück du frei haben willst.
+                  </p>
+                )}
+                {blocks.map((b, i) => {
+                  const r = result.blockResults[i];
+                  return (
+                    <div key={i} className={`rounded-lg border p-2.5 space-y-2 ${dark ? "border-slate-700" : "border-slate-200"}`}>
+                      <div className="grid grid-cols-3 gap-2">
+                        <div>
+                          <label className={labelCls}>Tage frei</label>
+                          <input className={inputCls} type="number" min="1" value={b.len}
+                            onFocus={selectAllOnFocus} onChange={(e) => updBlock(i, { len: e.target.value })} />
+                        </div>
+                        <div>
+                          <label className={labelCls}>Monat</label>
+                          <select className={inputCls} value={b.month} onChange={(e) => updBlock(i, { month: e.target.value })}>
+                            <option value="">egal</option>
+                            {MONTHS.map((m, mi) => (
+                              <option key={mi} value={mi}>{m}</option>
+                            ))}
+                          </select>
+                        </div>
+                        <div>
+                          <label className={labelCls}>Überstd.-Tage</label>
+                          <input className={inputCls} type="number" min="0" step="0.5" placeholder="0" value={b.ot}
+                            onFocus={selectAllOnFocus} onChange={(e) => updBlock(i, { ot: e.target.value })} />
+                        </div>
+                      </div>
+                      <div className="flex items-center justify-between">
+                        <p className="text-xs">
+                          {r?.placed ? (
+                            <span className="text-emerald-700">
+                              {fmtDate(days[r.start])} – {fmtDate(days[r.end])} · kostet {fmtNum(r.cost)} Tage
+                            </span>
+                          ) : (
+                            <span className="text-rose-600">Keine Platzierung möglich (Budget oder Monat prüfen)</span>
+                          )}
+                        </p>
+                        <button onClick={() => delBlock(i)} className="text-xs text-slate-400 hover:text-rose-600">Entfernen</button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </CollapsibleCard>
+            </aside>
 
         {/* Ergebnisse */}
         <div className="space-y-6">
@@ -876,82 +1195,21 @@ function Urlaubsplaner() {
               ))}
             </div>
             <p className="text-[11px] text-slate-400">
-              Klick auf einen leeren Arbeitstag setzt den oben gewählten Tagestyp – mit der Maus kannst du gedrückt
-              halten und ziehen, um mehrere Tage auf einmal auszuwählen (auch über Wochen- und Monatsgrenzen hinweg;
-              Wochenenden, Feiertage und bereits geplante Tage werden übersprungen). Auf Touch-Geräten setzt du Tage
-              einzeln per Tippen; Wischen scrollt wie gewohnt. Klick auf
-              einen geplanten Tag
-              öffnet die Auswahl: entfernen oder in den anderen Typ tauschen. Entfernte Tage bleiben Arbeitstage
-              und werden von der Automatik nicht erneut belegt.
+              Klick setzt Tage, Ziehen wählt mehrere aus, Klick auf geplante Tage öffnet Entfernen/Tauschen.
+              <InfoHint dark={dark} text="Klick auf einen leeren Arbeitstag setzt den oben gewählten Tagestyp – mit der Maus kannst du gedrückt halten und ziehen, um mehrere Tage auf einmal auszuwählen, auch über Wochen- und Monatsgrenzen hinweg; Wochenenden, Feiertage und bereits geplante Tage werden übersprungen. Auf Touch-Geräten setzt du Tage einzeln per Tippen; Wischen scrollt wie gewohnt. Entfernte Tage bleiben Arbeitstage und werden von der Automatik nicht erneut belegt." />
             </p>
           </section>
 
           {/* Jahreskalender */}
-          <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-            {MONTHS.map((mName, m) => {
-              const mDays = days.filter((d) => d.m === m);
-              const lead = (mDays[0].dow + 6) % 7; // Woche beginnt Montag
-              return (
-                <div key={m} className={`${cardCls} p-3`}>
-                  <h3 className="text-sm font-bold mb-2">{mName}</h3>
-                  <div className="grid grid-cols-7 gap-1 text-center text-[10px] text-slate-400 mb-1">
-                    {["Mo","Di","Mi","Do","Fr","Sa","So"].map((w) => <span key={w}>{w}</span>)}
-                  </div>
-                  <div className="grid grid-cols-7 gap-1">
-                    {Array.from({ length: lead }).map((_, i) => <span key={`x${i}`} />)}
-                    {mDays.map((day) => {
-                      const selType = result.sel[day.i];
-                      const clickable = day.cost > 0;
-                      const manual = yearOverrides[`${day.m}-${day.d}`];
-                      const lo = drag ? Math.min(drag.anchor, drag.current) : -1;
-                      const hi = drag ? Math.max(drag.anchor, drag.current) : -1;
-                      const inDrag = drag && clickable && !selType && day.i >= lo && day.i <= hi;
-                      const ring = inDrag
-                        ? clickMode === "vac" ? "ring-2 ring-emerald-500" : "ring-2 ring-sky-500"
-                        : manual && manual !== "none" ? (dark ? "ring-2 ring-slate-300" : "ring-2 ring-slate-500")
-                        : clickable ? "hover:ring-2 hover:ring-emerald-400" : "";
-                      return (
-                        <button key={day.i} type="button" title={dayTitle(day, selType)}
-                          data-dayindex={day.i}
-                          onClick={() => {
-                            if (dragAppliedRef.current) { dragAppliedRef.current = false; return; }
-                            onDayClick(day);
-                          }}
-                          onPointerDown={(e) => {
-                            dragAppliedRef.current = false;
-                            // Zieh-Auswahl nur mit Maus/Stift – auf Touch-Geräten
-                            // bleibt Wischen dem Scrollen vorbehalten (Tippen setzt einzelne Tage)
-                            if (clickable && !selType && e.pointerType !== "touch") {
-                              e.preventDefault(); // Textauswahl unterdrücken
-                              try { e.currentTarget.releasePointerCapture(e.pointerId); } catch {}
-                              setDrag({ anchor: day.i, current: day.i });
-                            }
-                          }}
-                          className={`h-7 rounded-md flex items-center justify-center text-[11px] tabular-nums select-none ${
-                            clickable ? "cursor-pointer" : "cursor-default"
-                          } ${ring} ${dayClass(day, selType, showWeekendHolidays, dark)}`}>
-                          {day.d}
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
-              );
-            })}
-          </section>
+          {calendarSection}
 
           <p className="text-xs text-slate-400 leading-relaxed">
-            Hinweise: Mariä Himmelfahrt gilt in Bayern nur in Gemeinden mit überwiegend katholischer Bevölkerung;
-            Fronleichnam gilt in Sachsen und Thüringen nur in einzelnen Regionen und ist hier nicht berücksichtigt.
-            Die Optimierung setzt Wunschblöcke zuerst; der 24.12. und der 31.12. werden bei 100%- oder
-            50%-Regelung immer fest eingeplant, damit sie die Feiertagsserie nicht unterbrechen. Die automatische
-            Verteilung arbeitet danach streng nach
-            Rendite: mit dem Minimalbudget kauft sie nur isolierte 1-Tages-Brücken (1 Tag → 4 freie Tage); erst
-            mit mehr Budget kommen 2-, 3- und 4-Tages-Lücken hinzu – verteilt über das Jahr, höchstens eine Lücke
-            je Monat pro Runde. Reine Urlaubswochen ohne Feiertag werden nie automatisch verplant; nicht
-            eingesetzte Tage bleiben als Rest übrig und stehen dir zur freien Verfügung.
+            Wunschblöcke zuerst, dann Brückentage streng nach Rendite.
+            <InfoHint dark={dark} text="Mariä Himmelfahrt gilt in Bayern nur in Gemeinden mit überwiegend katholischer Bevölkerung; Fronleichnam gilt in Sachsen und Thüringen nur in einzelnen Regionen und ist hier nicht berücksichtigt. Die Optimierung setzt Wunschblöcke zuerst; der 24.12. und der 31.12. werden bei 100%- oder 50%-Regelung immer fest eingeplant, damit sie die Feiertagsserie nicht unterbrechen. Die automatische Verteilung kauft mit dem Minimalbudget nur isolierte 1-Tages-Brücken (1 Tag → 4 freie Tage); mehr Budget schaltet 2-, 3- und 4-Tages-Lücken frei – verteilt über das Jahr, höchstens eine Lücke je Monat pro Runde. Reine Urlaubswochen ohne Feiertag werden nie automatisch verplant; nicht eingesetzte Tage bleiben als Rest übrig." />
           </p>
         </div>
+          </div>
+        )}
       </main>
 
       {/* Dialog: geplanten Tag entfernen oder tauschen */}
