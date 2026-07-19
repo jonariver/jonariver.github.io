@@ -170,9 +170,126 @@ bleibt übrig.
 - Feiertags-Feinheiten sind bewusst nicht regionsgenau abgebildet: Mariä
   Himmelfahrt (Bayern) und Fronleichnam (Sachsen/Thüringen) gelten dort nur in
   bestimmten Gemeinden; der Augsburger Feiertag wird herausgefiltert.
-- **Keine Persistenz der Planung:** Nur der Offen/Zu-Zustand der Karten wird
-  gespeichert. Manuelle Overrides, Blöcke und übrige Eingaben liegen nur im
-  Speicher und gehen beim Neuladen verloren.
+- **Keine lokale Persistenz der Planung:** Nur der Offen/Zu-Zustand der Karten
+  wird lokal (localStorage) gespeichert. Manuelle Overrides, Blöcke und übrige
+  Eingaben liegen nur im Speicher und gehen beim Neuladen verloren – sie lassen
+  sich aber über „Planung teilen“ als Link weitergeben (siehe unten).
 - Externe Laufzeitabhängigkeiten (React-, Babel-, Tailwind-CDN sowie beide APIs):
   Bei fehlenden Feiertagsdaten gibt es einen lokalen Fallback, bei fehlenden
   Schulferien nur einen Hinweis.
+
+
+## Planung teilen (Share-Link)
+
+### Zweck
+Aktuellen Planungsstand über einen teilbaren Link weitergeben – ohne Backend,
+lauffähig auf GitHub Pages. Öffnet jemand den Link, wird der Stand automatisch
+wiederhergestellt.
+
+### Modell
+Der Plan ist eine **reine Ableitung** von `plan(days, cfg)`. Es gibt keine
+separaten Listen manueller/automatischer Tage:
+
+- **Manuelle Tage** = `overrides` (`"JAHR:m-d" → "vac" | "ot" | "none"`;
+  `none` = entfernt/gesperrt, bleibt Arbeitstag).
+- **Automatische Tage** = aus `plan()` (`result.sel[]` + `origin[]`), nicht
+  persistiert, sondern deterministisch neu berechnet.
+- **Halbe Tage** ergeben sich aus `xmasRule` (24./31.12.), nicht aus einer
+  beliebigen Dauer. Ein Datum kann nicht gleichzeitig Urlaub und Überstunden
+  sein (ein Map-Key → ein Wert).
+
+Deshalb speichert der Link **nur Eingaben**; alles Übrige (Feiertage,
+Schulferien, Plan, Farben, Legende, Tooltips, Kontingente) wird beim Laden neu
+erzeugt.
+
+### Speicherort der Logik (in `app.jsx`)
+- Reine Helfer (vor der Komponente, Abschnitt „Teilen: versionierter
+  Share-Link"): `bytesToB64url`/`b64urlToBytes`, `isValidMd`,
+  `buildSharePayload`, `encodeShare`, `decodeShare`, `readSharedPlan` sowie die
+  Konstanten `SHARE_VERSION`, `SHARE_MAX_URL`, `SHARE_MAX_DECODED`,
+  `SHARE_MAX_OVERRIDES`, `SHARE_MAX_BLOCKS`.
+- In `Urlaubsplaner`: `buildShareUrl`, `handleShare`, `copyFromModal`,
+  `showToast`, ein Mount-`useEffect` (Lade-Hinweis + Fragment-Bereinigung),
+  Header-Button „Planung teilen", Fallback-Kopier-Dialog (`copyUrl`) und Toast
+  (`toast`).
+
+### Datenformat (Version 1)
+Kodierung: `base64url(UTF-8(JSON))` im **URL-Fragment**: `…/#plan=<code>`
+(Fragment, weil es auf GitHub Pages ohne Backend funktioniert und nicht an den
+Server gesendet wird). Kodiert ≠ verschlüsselt.
+
+```jsonc
+{
+  "version": 1,
+  "state": {
+    "y": 2027, "st": "BY", "vac": 30, "ot": 5, "x": "50",   // Jahr, Land, Kontingente, 24./31.12.-Regel
+    "m": "profi", "g": "free", "ss": 0,                       // uiMode, simpleGoal, simpleStarted
+    "sh": "avoid",                                            // Schulferien-Präferenz
+    "av": "", "ao": "0", "sf": "vac", "af": 0, "wh": 1,       // Auto-Budget/-Optionen, showWeekendHolidays
+    "b": [["16","",""],["9","",""]],                          // Wunschblöcke [len, month, ot]
+    "ov": { "v": ["4-14"], "o": ["5-4"], "n": ["6-1"] }       // manuelle Tage: vac / ot / none (Keys "m-d")
+  }
+}
+```
+
+Bewusst **nicht** gespeichert (ableitbar bzw. UI-lokal): Feiertage, Schulferien,
+`days`, das Planungsergebnis, sowie `dark`, `panels`, `clickMode`, `drag`,
+`dialogDay`, `vacTip`, `showSimpleCal`. Keine personenbezogenen Daten.
+
+### Urlaub/Überstunden, manuell/automatisch
+- **Urlaub vs. Überstunden**: über den Override-Wert (`vac`/`ot`), abgelegt in
+  `ov.v` bzw. `ov.o`; Datum effektiv `YYYY-MM-DD` (im Link kompakt als `"m-d"`,
+  Jahr in `y`).
+- **Manuell** = alles in `ov` (wird gespeichert und beim Laden 1:1 gesetzt).
+  **Automatisch** = deterministisch neu berechnet.
+- Entfernt/gesperrt = `ov.n` (Typ „none", gilt für Urlaub und Überstunden;
+  Tag bleibt Arbeitstag).
+
+### Konfliktregeln
+- Gleiches Datum in mehreren Kategorien (`v`/`o`/`n`) → **beide verworfen**, kein
+  stilles Überschreiben, `warning=true` → Toast „…teilweise geladen".
+- Doppelte Datumswerte innerhalb einer Kategorie → dedupliziert.
+- Manuell hat Vorrang: ein Override belegt den Tag in Phase 0 von `plan()`; die
+  Automatik kann ihn nicht überschreiben.
+
+### Kontingent-Validierung
+Urlaubs- und Überstundenkontingent bleiben getrennt (`budget.vac`/`budget.ot`)
+und werden nicht verrechnet. `plan()` setzt manuelle Tage nur, solange das
+jeweilige Budget reicht; überzählige erhöhen `failedManual` und lösen den
+bestehenden roten Hinweis aus. Beim Dekodieren werden Werte auf `0…366` begrenzt.
+
+### Verhalten beim Laden
+`readSharedPlan(location.hash)` wird **einmal synchron als erster Hook** gelesen;
+die betroffenen `useState` werden direkt daraus initialisiert → **kein Flash,
+keine Race Condition**, keine Standardwerte/Effekte überschreiben den Zustand.
+Feiertage/Schulferien laden über die bestehenden `[year, st]`-Effekte nach; der
+Plan wird deterministisch neu berechnet. Danach Toast („Geteilte Planung wurde
+geladen." / „…teilweise geladen." / bei kaputtem `#plan=`: „…konnte nicht
+vollständig geladen werden.") und Entfernen des Fragments via
+`history.replaceState`. Validiert werden Version, Jahr (1970–2100),
+Bundesland, Enums, `autoFrom` 0–11, echte Kalenderprüfung jedes `"m-d"`,
+Deckelung (Blöcke ≤20, Overrides ≤400, Payload ≤100 000 Zeichen). Teilweise
+gültige Links laden das Gültige + Hinweis; vollständig ungültige/veraltete
+werden ignoriert (App startet normal). Links ohne `#plan=` funktionieren
+unverändert.
+
+### Teilen (Button)
+`handleShare`: URL bauen → `navigator.share()` (falls verfügbar, `AbortError`
+still) → sonst Clipboard-API („Link wurde kopiert.") → sonst Fallback-Dialog mit
+markierbarem Feld + Kopier-Button (`execCommand`). Datenschutzhinweis im Dialog:
+„Der Link enthält deine Planungseinstellungen. Jeder mit diesem Link kann die
+Planung öffnen." Button im Header, in beiden Modi, mit `aria-label`, Fokusring
+und Teilen-Icon.
+
+### Einschränkungen
+- **Linklänge**: praktische Obergrenze `SHARE_MAX_URL = 8000`; darüber Hinweis
+  „Planung zu umfangreich für einen Link." (typische Pläne bleiben deutlich
+  darunter).
+- **Determinismus**: automatische Tage werden neu berechnet und stimmen exakt
+  überein, solange Feiertage/Schulferien für (Jahr, Bundesland) identisch geladen
+  werden; fällt eine API aus, greift die integrierte Feiertagsberechnung.
+  Manuelle Tage sind nie betroffen (explizit gespeichert).
+- **Datenschutz**: keine Übertragung an zusätzliche Server; kein externer
+  Shortener/Speicherdienst.
+- Ein geteiltes Jahr außerhalb der Dropdown-Spanne wird korrekt geladen/gerechnet;
+  nur das Jahr-Auswahlfeld zeigt es evtl. nicht an.
