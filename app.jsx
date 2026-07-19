@@ -1237,34 +1237,96 @@ function Urlaubsplaner() {
     <p className="text-[11px] text-orange-500/80">Schulferien konnten derzeit nicht geladen werden.</p>
   ) : null;
 
-  // Kurze, dynamisch erzeugte Begründung für einen automatisch empfohlenen
-  // Zeitraum. EINE Quelle für Einfach- UND Profi-Modus; leitet alles aus der
-  // Periode und den aktuellen Einstellungen ab und greift NICHT in plan()/die
-  // Kernberechnung ein. Rückgabe: Begründungstext oder null (kein Auto-Vorschlag).
+  // Strukturierte, dynamisch erzeugte Begründung für einen empfohlenen Zeitraum.
+  // EINE Quelle für Einfach- UND Profi-Modus; leitet alles aus der Periode, den
+  // Tagen und den aktuellen Einstellungen ab und greift NICHT in plan()/die
+  // Kernberechnung, den Share-Link oder gespeicherte Daten ein.
+  // Rückgabe: { reason, holidayNote, holidayConflict }.
   const blockReason = (p) => {
-    if (!p.origins.includes("auto")) return null; // nur Auto-Vorschläge begründen
-    const invested = p.vac + p.ot;
-    // Ferienüberschneidung im Zeitraum bestimmen (gleiche Ferientage wie im Kalender)
-    let ferienHits = 0;
+    // Feiertage + Sondertage im Zeitraum sammeln (Kalenderreihenfolge, dedupliziert)
+    // und zählen, wie viele getrennte Wochenenden der Zeitraum verbindet.
+    const holidayNames = [];
+    const seen = new Set();
+    let hasXmasEve = false, hasNYE = false;
+    let weekends = 0, inWeekend = false;
     for (let k = p.s; k <= p.e; k++) {
-      if (vacationDays[`${days[k].m}-${days[k].d}`]) ferienHits++;
+      const d = days[k];
+      if (d.holiday && !seen.has(d.holiday)) { seen.add(d.holiday); holidayNames.push(d.holiday); }
+      if (d.special === "Heiligabend") hasXmasEve = true;
+      if (d.special === "Silvester") hasNYE = true;
+      if (d.weekend) { if (!inWeekend) { weekends++; inWeekend = true; } } else inWeekend = false;
     }
-    const overlapsFerien = ferienHits > 0;
+    const invested = p.vac + p.ot;
 
-    const parts = [];
-    // 1) Brücken-/Hebelwirkung – der Grund, warum die Automatik diese Tage kauft
-    if (invested > 0) {
-      const noun = invested === 1 ? "eingesetzter Tag" : "eingesetzte Tage";
-      const verb = invested === 1 ? "ergibt" : "ergeben";
-      parts.push(`${fmtNum(invested)} ${noun} ${verb} ${p.len} freie Tage am Stück`);
+    // --- Hauptbegründung: was macht den Zeitraum attraktiv? ---
+    let reason = null;
+    const xmas = holidayNames.some((n) => n.includes("Weihnachtstag"));
+    if (xmas && (hasXmasEve || hasNYE)) {
+      // Weihnachts-/Silvester-Serie
+      if (hasXmasEve && hasNYE) reason = "Die Weihnachtsfeiertage sowie Heiligabend und Silvester werden verbunden.";
+      else if (hasXmasEve) reason = "Die Weihnachtsfeiertage und Heiligabend werden verbunden.";
+      else reason = "Die Weihnachtsfeiertage und Silvester werden verbunden.";
+    } else {
+      // Namen für den Satz wählen: Feiertage bevorzugt, sonst Sondertage
+      let names = holidayNames.slice();
+      if (names.length === 0) {
+        if (hasXmasEve) names.push("Heiligabend");
+        if (hasNYE) names.push("Silvester");
+      }
+      names = names.slice(0, 2);
+      if (names.length > 0) {
+        const subject = names.length === 2 ? `${names[0]} und ${names[1]}` : names[0];
+        const plural = names.length > 1;
+        if (weekends >= 2) reason = `${subject} ${plural ? "werden" : "wird"} mit zwei Wochenenden verbunden.`;
+        else reason = `${subject} verlängert${plural ? "n" : ""} den freien Zeitraum.`;
+      } else if (invested > 0) {
+        // kein Feiertag/Sondertag – rein über Urlaubstage erzeugter Zeitraum
+        if (weekends >= 2) reason = "Urlaubstage verbinden zwei Wochenenden zu einem längeren freien Zeitraum.";
+        else if (weekends === 1) reason = "Urlaubstage verlängern ein Wochenende zu einem längeren freien Zeitraum.";
+        else reason = "Urlaubstage ergeben einen längeren freien Zeitraum.";
+      }
+      // invested === 0 ohne Feiertag: nichts Sinnvolles zu sagen -> reason bleibt null
     }
-    // 2) Bezug zur Schulferien-Präferenz
-    if (schoolHolidayPreference === "prefer" && overlapsFerien) {
-      parts.push("liegt wie gewünscht in den Schulferien");
-    } else if (schoolHolidayPreference === "avoid" && overlapsFerien) {
-      parts.push("trotz „Schulferien meiden“ gewählt – der Brückeneffekt überwiegt hier die Ferienüberschneidung");
+
+    // --- Schulferienhinweis: nur bei gesicherten Feriendaten (vacStatus "ok") ---
+    let holidayNote = null, holidayConflict = false;
+    if (vacStatus === "ok" && (schoolHolidayPreference === "avoid" || schoolHolidayPreference === "prefer")) {
+      let ferienTage = 0;
+      for (let k = p.s; k <= p.e; k++) if (vacationDays[`${days[k].m}-${days[k].d}`]) ferienTage++;
+      if (ferienTage > 0) {
+        if (schoolHolidayPreference === "avoid") {
+          holidayConflict = true;
+          holidayNote = `Überschneidet sich an ${ferienTage} ${ferienTage === 1 ? "Tag" : "Tagen"} mit den Schulferien. Deine Auswahl wird als Präferenz und nicht als Ausschluss behandelt.`;
+        } else {
+          holidayNote = "Liegt wie gewünscht teilweise in den Schulferien.";
+        }
+      }
     }
-    return parts.join(" · ") || null;
+
+    return { reason, holidayNote, holidayConflict };
+  };
+
+  // Gemeinsame Darstellung der Begründung – identisch in Einfach- und Profi-Modus.
+  // Hauptbegründung als dezente graue Zeile; Schulferien-Konflikt (avoid) als
+  // zweite Zeile in zurückhaltendem Orange; erfüllter Ferienwunsch (prefer)
+  // ebenfalls separat, aber gedämpft. Höchstens zwei Zusatzzeilen pro Zeitraum.
+  const reasonLines = (p) => {
+    const r = blockReason(p);
+    if (!r || (!r.reason && !r.holidayNote)) return null;
+    return (
+      <>
+        {r.reason && (
+          <span className={`w-full text-[11px] leading-snug ${dark ? "text-slate-500" : "text-slate-400"}`}>{r.reason}</span>
+        )}
+        {r.holidayNote && (
+          <span className={`w-full text-[11px] leading-snug ${
+            r.holidayConflict
+              ? (dark ? "text-orange-300/80" : "text-orange-600/90")
+              : (dark ? "text-slate-500" : "text-slate-400")
+          }`}>{r.holidayNote}</span>
+        )}
+      </>
+    );
   };
 
   return (
@@ -1459,20 +1521,15 @@ function Urlaubsplaner() {
                       </p>
                     ) : (
                       <ul className={`divide-y ${dark ? "divide-slate-800" : "divide-slate-100"}`}>
-                        {result.periods.map((p, i) => {
-                          const reason = blockReason(p);
-                          return (
+                        {result.periods.map((p, i) => (
                           <li key={i} className="py-2 flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 text-sm">
                             <span className="font-medium">{fmtDate(days[p.s])} – {fmtDate(days[p.e])}</span>
                             <span className={`tabular-nums ${dark ? "text-slate-400" : "text-slate-500"}`}>
                               {p.len} freie Tage · {fmtNum(p.vac)} Urlaubstag{p.vac === 1 ? "" : "e"}
                             </span>
-                            {reason && (
-                              <span className={`w-full text-[11px] leading-snug ${dark ? "text-slate-500" : "text-slate-400"}`}>{reason}</span>
-                            )}
+                            {reasonLines(p)}
                           </li>
-                          );
-                        })}
+                        ))}
                       </ul>
                     )}
                   </section>
@@ -1708,9 +1765,7 @@ function Urlaubsplaner() {
               <p className={`text-sm ${dark ? "text-slate-400" : "text-slate-500"}`}>Gib Urlaubstage ein, um Vorschläge zu sehen.</p>
             ) : (
               <ul className={`divide-y ${dark ? "divide-slate-800" : "divide-slate-100"}`}>
-                {result.periods.map((p, i) => {
-                  const reason = blockReason(p);
-                  return (
+                {result.periods.map((p, i) => (
                   <li key={i} className="py-2 flex flex-wrap items-center justify-between gap-x-4 gap-y-1 text-sm">
                     <span className="flex flex-wrap items-center gap-2 font-medium">
                       {fmtDate(days[p.s])} – {fmtDate(days[p.e])}
@@ -1745,12 +1800,9 @@ function Urlaubsplaner() {
                         </a>
                       </span>
                     </span>
-                    {reason && (
-                      <span className={`w-full text-[11px] leading-snug ${dark ? "text-slate-500" : "text-slate-400"}`}>{reason}</span>
-                    )}
+                    {reasonLines(p)}
                   </li>
-                  );
-                })}
+                ))}
               </ul>
             )}
           </section>
