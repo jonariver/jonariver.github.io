@@ -354,6 +354,12 @@ function plan(days, cfg) {
 
 const fmtNum = (x) => (x % 1 === 0 ? String(x) : x.toFixed(1).replace(".", ","));
 const fmtDate = (day) => `${DOWS[day.dow]} ${String(day.d).padStart(2, "0")}.${String(day.m + 1).padStart(2, "0")}.`;
+// Reines Datumsformat "DD.MM." aus einem UTC-Timestamp (Tag-genau), fuer die
+// Monatszusammenfassung (Feiertage/Schulferien) unter den Monatskarten.
+const fmtDDMM = (ts) => {
+  const dt = new Date(ts);
+  return `${String(dt.getUTCDate()).padStart(2, "0")}.${String(dt.getUTCMonth() + 1).padStart(2, "0")}.`;
+};
 
 function dayClass(day, selType, showWeekendHolidays, dark) {
   if (selType === "vac") return "bg-emerald-600 text-white";
@@ -1211,12 +1217,77 @@ function Urlaubsplaner() {
     }
   };
 
+  // Kurze Monatszusammenfassung für Feiertage und Schulferien direkt unter
+  // jeder Monatskarte. Nutzt ausschließlich vorhandene Daten (days, vacations,
+  // vacStatus, year, showWeekendHolidays) – keine neuen API-Aufrufe, keine
+  // Änderung an plan()/Kernberechnung/Share-Link/gespeicherten Daten.
+  // Rückgabe: { holidaysText, vacationsText } (jeweils null, wenn nichts anzuzeigen ist).
+  const monthSummary = (m) => {
+    // --- Feiertage: Namen dieses Monats sammeln, deduplizieren, ggf. Wochenende ausschließen ---
+    const holidayNames = [];
+    const seenH = new Set();
+    for (const d of days) {
+      if (d.m !== m || !d.holiday) continue;
+      if (d.weekend && !showWeekendHolidays) continue;
+      if (!seenH.has(d.holiday)) { seenH.add(d.holiday); holidayNames.push(d.holiday); }
+    }
+    let holidaysText = null;
+    if (holidayNames.length > 0) {
+      const shown = holidayNames.slice(0, 2);
+      const rest = holidayNames.length - shown.length;
+      holidaysText = shown.join(", ") + (rest === 1 ? " + 1 weiterer" : rest > 1 ? ` + ${rest} weitere` : "");
+    }
+
+    // --- Schulferien: Zeiträume aus "vacations" auf den Monat zuschneiden ---
+    let vacationsText = null;
+    if (vacStatus === "ok" && Array.isArray(vacations)) {
+      const monthStart = Date.UTC(year, m, 1);
+      const monthEnd = Date.UTC(year, m + 1, 0); // letzter Tag des Monats
+      const entries = [];
+      for (const p of vacations) {
+        if (!p || !p.start || !p.end) continue;
+        const s = new Date(p.start), e = new Date(p.end);
+        if (isNaN(s) || isNaN(e) || e < s) continue;
+        const sTs = Date.UTC(s.getUTCFullYear(), s.getUTCMonth(), s.getUTCDate());
+        const eTs = Date.UTC(e.getUTCFullYear(), e.getUTCMonth(), e.getUTCDate());
+        if (eTs < monthStart || sTs > monthEnd) continue; // kein Bezug zu diesem Monat
+        const startsBefore = sTs < monthStart;
+        const endsAfter = eTs > monthEnd;
+        const overlapS = Math.max(sTs, monthStart);
+        const overlapE = Math.min(eTs, monthEnd);
+        let dateText;
+        if (startsBefore && !endsAfter) dateText = `bis ${fmtDDMM(overlapE)}`;
+        else if (!startsBefore && endsAfter) dateText = `ab ${fmtDDMM(overlapS)}`;
+        else dateText = `${fmtDDMM(overlapS)}–${fmtDDMM(overlapE)}`;
+        const name = p.name_cp || p.name || "Schulferien";
+        entries.push({ name, dateText, sortKey: overlapS });
+      }
+      // Nach Beginn sortieren, dann pro Name nur den ersten (chronologisch frühesten) Eintrag behalten
+      entries.sort((a, b) => a.sortKey - b.sortKey);
+      const seenV = new Set();
+      const unique = [];
+      for (const en of entries) {
+        if (seenV.has(en.name)) continue;
+        seenV.add(en.name);
+        unique.push(en);
+      }
+      if (unique.length > 0) {
+        const shown = unique.slice(0, 2);
+        const rest = unique.length - shown.length;
+        vacationsText = shown.map((u) => `${u.name} ${u.dateText}`).join(", ") + (rest > 0 ? ` + ${rest} weitere` : "");
+      }
+    }
+
+    return { holidaysText, vacationsText };
+  };
+
   // Jahreskalender – in beiden Modi identisch wiederverwendet
   const calendarSection = (
     <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
             {MONTHS.map((mName, m) => {
               const mDays = days.filter((d) => d.m === m);
               const lead = (mDays[0].dow + 6) % 7; // Woche beginnt Montag
+              const summary = monthSummary(m);
               return (
                 <div key={m} ref={(el) => { monthRefs.current[m] = el; }}
                   className={`${cardCls} p-3 scroll-mt-24 transition-shadow duration-300 ${
@@ -1279,6 +1350,20 @@ function Urlaubsplaner() {
                       );
                     })}
                   </div>
+                  {(summary.holidaysText || summary.vacationsText) && (
+                    <div className={`mt-2 pt-2 border-t space-y-0.5 ${dark ? "border-slate-800" : "border-slate-100"}`}>
+                      {summary.holidaysText && (
+                        <p className={`text-[10px] leading-snug ${dark ? "text-rose-400/80" : "text-rose-600/80"}`}>
+                          Feiertage: {summary.holidaysText}
+                        </p>
+                      )}
+                      {summary.vacationsText && (
+                        <p className={`text-[10px] leading-snug ${dark ? "text-orange-400/80" : "text-orange-600/80"}`}>
+                          Schulferien: {summary.vacationsText}
+                        </p>
+                      )}
+                    </div>
+                  )}
                 </div>
               );
             })}
