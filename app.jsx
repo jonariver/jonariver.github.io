@@ -704,6 +704,13 @@ function Urlaubsplaner() {
   const [simpleGoal, setSimpleGoal] = useState(shared ? shared.simpleGoal : "free"); // free | blocks | short
   const [simpleStarted, setSimpleStarted] = useState(shared ? shared.simpleStarted : false);
   const [showSimpleCal, setShowSimpleCal] = useState(false);
+  // Mobilfreundliche Kalender-Navigation: Zielmonat, der nach dem Sprung kurz
+  // hervorgehoben wird, und ein wartender Zielmonat, falls der Kalender im
+  // Einfachmodus erst noch eingeblendet werden muss. Gemeinsam für beide Modi.
+  const [highlightedMonth, setHighlightedMonth] = useState(null);
+  const [scrollTarget, setScrollTarget] = useState(null);
+  const monthRefs = useRef([]); // DOM-Referenzen der 12 Monats-Container (Index = Monat 0-basiert)
+  const highlightTimerRef = useRef(null);
   // Eingeklappte Bereiche pro Gerät merken; Standard: mobil nur "Allgemein" offen
   const [panels, setPanels] = useState(() => {
     try {
@@ -1161,6 +1168,49 @@ function Urlaubsplaner() {
     </div>
   );
 
+  // Mobilfreundliche Navigation: von einem empfohlenen Zeitraum weich zum
+  // passenden Monat im Kalender springen. EINE Quelle für Einfach- UND
+  // Profi-Modus; greift NICHT in plan()/die Kernberechnung, den Share-Link
+  // oder gespeicherte Daten ein – reines Rendering/Scrolling.
+  const performScroll = (m) => {
+    const el = monthRefs.current[m];
+    if (!el) return;
+    el.scrollIntoView({ behavior: "smooth", block: "start" });
+    setHighlightedMonth(m);
+    if (highlightTimerRef.current) clearTimeout(highlightTimerRef.current);
+    highlightTimerRef.current = setTimeout(() => setHighlightedMonth(null), 1800);
+  };
+  // Wartet im Einfachmodus, bis der Kalender nach setShowSimpleCal(true)
+  // tatsächlich gerendert ist (monthRefs gefüllt), bevor gescrollt wird.
+  useEffect(() => {
+    if (scrollTarget === null) return;
+    if (uiMode === "einfach" && !showSimpleCal) return; // erst wenn der Kalender sichtbar ist
+    const id = requestAnimationFrame(() => {
+      performScroll(scrollTarget);
+      setScrollTarget(null);
+    });
+    return () => cancelAnimationFrame(id);
+  }, [scrollTarget, showSimpleCal, uiMode]);
+  useEffect(() => () => { if (highlightTimerRef.current) clearTimeout(highlightTimerRef.current); }, []);
+  const scrollToPeriod = (p) => {
+    const targetMonth = days[p.s].m; // Zeiträume über mehrere Monate: Startmonat
+    if (uiMode === "einfach" && !showSimpleCal) {
+      setShowSimpleCal(true);
+      setScrollTarget(targetMonth);
+    } else {
+      performScroll(targetMonth);
+    }
+  };
+  // Tastaturbedienung: nur reagieren, wenn der Fokus auf der Zeile selbst liegt
+  // (nicht auf verschachtelten Buttons/Links wie ICS/iCal oder Google).
+  const onRowKeyDown = (e, p) => {
+    if (e.target !== e.currentTarget) return;
+    if (e.key === "Enter" || e.key === " " || e.key === "Spacebar") {
+      e.preventDefault();
+      scrollToPeriod(p);
+    }
+  };
+
   // Jahreskalender – in beiden Modi identisch wiederverwendet
   const calendarSection = (
     <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
@@ -1168,7 +1218,10 @@ function Urlaubsplaner() {
               const mDays = days.filter((d) => d.m === m);
               const lead = (mDays[0].dow + 6) % 7; // Woche beginnt Montag
               return (
-                <div key={m} className={`${cardCls} p-3`}>
+                <div key={m} ref={(el) => { monthRefs.current[m] = el; }}
+                  className={`${cardCls} p-3 transition-shadow duration-300 ${
+                    highlightedMonth === m ? (dark ? "ring-2 ring-emerald-400" : "ring-2 ring-emerald-500") : ""
+                  }`}>
                   <h3 className="text-sm font-bold mb-2">{mName}</h3>
                   <div className="grid grid-cols-7 gap-1 text-center text-[10px] text-slate-400 mb-1">
                     {["Mo","Di","Mi","Do","Fr","Sa","So"].map((w) => <span key={w}>{w}</span>)}
@@ -1522,7 +1575,11 @@ function Urlaubsplaner() {
                     ) : (
                       <ul className={`divide-y ${dark ? "divide-slate-800" : "divide-slate-100"}`}>
                         {result.periods.map((p, i) => (
-                          <li key={i} className="py-2 flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 text-sm">
+                          <li key={i} role="button" tabIndex={0}
+                            onClick={() => scrollToPeriod(p)}
+                            onKeyDown={(e) => onRowKeyDown(e, p)}
+                            title="Zum Monat im Kalender springen"
+                            className="py-2 flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 text-sm cursor-pointer rounded-md focus:outline-none focus:ring-2 focus:ring-emerald-500">
                             <span className="font-medium">{fmtDate(days[p.s])} – {fmtDate(days[p.e])}</span>
                             <span className={`tabular-nums ${dark ? "text-slate-400" : "text-slate-500"}`}>
                               {p.len} freie Tage · {fmtNum(p.vac)} Urlaubstag{p.vac === 1 ? "" : "e"}
@@ -1766,7 +1823,11 @@ function Urlaubsplaner() {
             ) : (
               <ul className={`divide-y ${dark ? "divide-slate-800" : "divide-slate-100"}`}>
                 {result.periods.map((p, i) => (
-                  <li key={i} className="py-2 flex flex-wrap items-center justify-between gap-x-4 gap-y-1 text-sm">
+                  <li key={i} role="button" tabIndex={0}
+                    onClick={() => scrollToPeriod(p)}
+                    onKeyDown={(e) => onRowKeyDown(e, p)}
+                    title="Zum Monat im Kalender springen"
+                    className="py-2 flex flex-wrap items-center justify-between gap-x-4 gap-y-1 text-sm cursor-pointer rounded-md focus:outline-none focus:ring-2 focus:ring-emerald-500">
                     <span className="flex flex-wrap items-center gap-2 font-medium">
                       {fmtDate(days[p.s])} – {fmtDate(days[p.e])}
                       {p.origins.includes("block") && (
@@ -1784,7 +1845,7 @@ function Urlaubsplaner() {
                         {p.len} Tage frei · {fmtNum(p.vac)} Urlaub{p.ot > 0 ? ` · ${fmtNum(p.ot)} Überstunden` : ""}
                       </span>
                       <span className="flex items-center gap-1.5">
-                        <button onClick={() => downloadIcs(p)}
+                        <button onClick={(e) => { e.stopPropagation(); downloadIcs(p); }}
                           title="Als .ics-Datei herunterladen (Apple Kalender, Outlook, iCal)"
                           className={`rounded-md border px-2 py-0.5 text-[11px] font-semibold ${
                             dark ? "border-slate-600 text-slate-300 hover:bg-slate-800" : "border-slate-300 text-slate-600 hover:bg-slate-100"
@@ -1792,6 +1853,7 @@ function Urlaubsplaner() {
                           ICS/iCal
                         </button>
                         <a href={googleUrl(p)} target="_blank" rel="noopener noreferrer"
+                          onClick={(e) => e.stopPropagation()}
                           title="In Google Kalender öffnen (vorausgefüllter Termin)"
                           className={`rounded-md border px-2 py-0.5 text-[11px] font-semibold ${
                             dark ? "border-slate-600 text-slate-300 hover:bg-slate-800" : "border-slate-300 text-slate-600 hover:bg-slate-100"
