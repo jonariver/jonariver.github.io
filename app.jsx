@@ -1237,6 +1237,36 @@ function Urlaubsplaner() {
     <p className="text-[11px] text-orange-500/80">Schulferien konnten derzeit nicht geladen werden.</p>
   ) : null;
 
+  // Kurze, dynamisch erzeugte Begründung für einen automatisch empfohlenen
+  // Zeitraum. EINE Quelle für Einfach- UND Profi-Modus; leitet alles aus der
+  // Periode und den aktuellen Einstellungen ab und greift NICHT in plan()/die
+  // Kernberechnung ein. Rückgabe: Begründungstext oder null (kein Auto-Vorschlag).
+  const blockReason = (p) => {
+    if (!p.origins.includes("auto")) return null; // nur Auto-Vorschläge begründen
+    const invested = p.vac + p.ot;
+    // Ferienüberschneidung im Zeitraum bestimmen (gleiche Ferientage wie im Kalender)
+    let ferienHits = 0;
+    for (let k = p.s; k <= p.e; k++) {
+      if (vacationDays[`${days[k].m}-${days[k].d}`]) ferienHits++;
+    }
+    const overlapsFerien = ferienHits > 0;
+
+    const parts = [];
+    // 1) Brücken-/Hebelwirkung – der Grund, warum die Automatik diese Tage kauft
+    if (invested > 0) {
+      const noun = invested === 1 ? "eingesetzter Tag" : "eingesetzte Tage";
+      const verb = invested === 1 ? "ergibt" : "ergeben";
+      parts.push(`${fmtNum(invested)} ${noun} ${verb} ${p.len} freie Tage am Stück`);
+    }
+    // 2) Bezug zur Schulferien-Präferenz
+    if (schoolHolidayPreference === "prefer" && overlapsFerien) {
+      parts.push("liegt wie gewünscht in den Schulferien");
+    } else if (schoolHolidayPreference === "avoid" && overlapsFerien) {
+      parts.push("trotz „Schulferien meiden“ gewählt – der Brückeneffekt überwiegt hier die Ferienüberschneidung");
+    }
+    return parts.join(" · ") || null;
+  };
+
   return (
     <div className={`min-h-screen ${dark ? "bg-slate-950 text-slate-100" : "bg-slate-100 text-slate-900"}`} style={{ fontFeatureSettings: '"tnum"' }}>
       <style>{`@keyframes upFade { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }`}</style>
@@ -1429,14 +1459,20 @@ function Urlaubsplaner() {
                       </p>
                     ) : (
                       <ul className={`divide-y ${dark ? "divide-slate-800" : "divide-slate-100"}`}>
-                        {result.periods.map((p, i) => (
+                        {result.periods.map((p, i) => {
+                          const reason = blockReason(p);
+                          return (
                           <li key={i} className="py-2 flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 text-sm">
                             <span className="font-medium">{fmtDate(days[p.s])} – {fmtDate(days[p.e])}</span>
                             <span className={`tabular-nums ${dark ? "text-slate-400" : "text-slate-500"}`}>
                               {p.len} freie Tage · {fmtNum(p.vac)} Urlaubstag{p.vac === 1 ? "" : "e"}
                             </span>
+                            {reason && (
+                              <span className={`w-full text-[11px] leading-snug ${dark ? "text-slate-500" : "text-slate-400"}`}>{reason}</span>
+                            )}
                           </li>
-                        ))}
+                          );
+                        })}
                       </ul>
                     )}
                   </section>
@@ -1672,7 +1708,9 @@ function Urlaubsplaner() {
               <p className={`text-sm ${dark ? "text-slate-400" : "text-slate-500"}`}>Gib Urlaubstage ein, um Vorschläge zu sehen.</p>
             ) : (
               <ul className={`divide-y ${dark ? "divide-slate-800" : "divide-slate-100"}`}>
-                {result.periods.map((p, i) => (
+                {result.periods.map((p, i) => {
+                  const reason = blockReason(p);
+                  return (
                   <li key={i} className="py-2 flex flex-wrap items-center justify-between gap-x-4 gap-y-1 text-sm">
                     <span className="flex flex-wrap items-center gap-2 font-medium">
                       {fmtDate(days[p.s])} – {fmtDate(days[p.e])}
@@ -1707,8 +1745,12 @@ function Urlaubsplaner() {
                         </a>
                       </span>
                     </span>
+                    {reason && (
+                      <span className={`w-full text-[11px] leading-snug ${dark ? "text-slate-500" : "text-slate-400"}`}>{reason}</span>
+                    )}
                   </li>
-                ))}
+                  );
+                })}
               </ul>
             )}
           </section>
