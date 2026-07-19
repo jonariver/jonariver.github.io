@@ -408,36 +408,231 @@ function InfoHint({ text, dark }) {
 }
 
 /* ------------------------------------------------------------------ */
+/* Teilen: versionierter Share-Link im URL-Fragment                    */
+/* ------------------------------------------------------------------ */
+/* Es werden ausschließlich EINGABEN gespeichert. Der Plan (auto. Tage,
+   Farben, Legende, Tooltips, Kontingente) wird beim Laden deterministisch
+   über plan(days,cfg) neu berechnet. Feiertage und Schulferien werden aus
+   Jahr + Bundesland erneut geladen und daher NICHT im Link abgelegt.
+   Manuelle Tage (overrides) werden 1:1 gespeichert und beim Laden nie
+   verändert. Kodiert ist base64url(JSON) – kompakt, unicode-sicher und
+   synchron dekodierbar (dadurch kein Race beim Initialisieren). */
+
+const SHARE_VERSION = 1;
+const SHARE_MAX_URL = 8000;        // praktische URL-Obergrenze
+const SHARE_MAX_DECODED = 100000;  // Schutz vor übermäßig großen Payloads
+const SHARE_MAX_OVERRIDES = 400;   // Obergrenze manueller Tage
+const SHARE_MAX_BLOCKS = 20;
+
+const XMAS_RULES = ["0", "50", "100"];
+const UI_MODES = ["einfach", "profi"];
+const SIMPLE_GOALS = ["free", "blocks", "short"];
+const SCHOOL_PREFS = ["prefer", "avoid", "neutral"];
+const SPEND_FIRST = ["vac", "ot"];
+
+// Bytes <-> base64url. TextEncoder/Decoder sorgen für korrekte Unicode-Behandlung.
+function bytesToB64url(bytes) {
+  let bin = "";
+  for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+  return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+function b64urlToBytes(s) {
+  const pad = s.length % 4 === 0 ? "" : "=".repeat(4 - (s.length % 4));
+  const bin = atob(s.replace(/-/g, "+").replace(/_/g, "/") + pad);
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
+
+// "m-d" (m 0-basiert) prüfen – inkl. echter Kalenderprüfung fürs Jahr,
+// damit z. B. der 30.02. oder ungültige Werte zuverlässig abgewiesen werden.
+function isValidMd(md, year) {
+  if (typeof md !== "string") return false;
+  const p = md.split("-");
+  if (p.length !== 2) return false;
+  const m = parseInt(p[0], 10), d = parseInt(p[1], 10);
+  if (!Number.isInteger(m) || !Number.isInteger(d) || m < 0 || m > 11 || d < 1 || d > 31) return false;
+  const dt = new Date(Date.UTC(year, m, d));
+  return dt.getUTCFullYear() === year && dt.getUTCMonth() === m && dt.getUTCDate() === d;
+}
+
+// Baut das kompakte, versionierte Share-Objekt aus einem Zustands-Snapshot.
+// overridesMd: Map "m-d" -> "vac"|"ot"|"none" (nur das geteilte Jahr).
+function buildSharePayload(s) {
+  const ov = { v: [], o: [], n: [] };
+  for (const [md, val] of Object.entries(s.overridesMd || {})) {
+    if (val === "vac") ov.v.push(md);
+    else if (val === "ot") ov.o.push(md);
+    else if (val === "none") ov.n.push(md);
+  }
+  const blocks = (s.blocks || []).slice(0, SHARE_MAX_BLOCKS).map((b) => [
+    String(b.len ?? ""), String(b.month ?? ""), String(b.ot ?? ""),
+  ]);
+  return {
+    version: SHARE_VERSION,
+    state: {
+      y: s.year, st: s.st, vac: s.vac, ot: s.ot, x: s.xmasRule,
+      m: s.uiMode, g: s.simpleGoal, ss: s.simpleStarted ? 1 : 0,
+      sh: s.schoolHolidayPreference, av: s.autoVac, ao: s.autoOt,
+      sf: s.spendFirst, af: s.autoFrom, wh: s.showWeekendHolidays ? 1 : 0,
+      b: blocks, ov,
+    },
+  };
+}
+
+function encodeShare(payload) {
+  const bytes = new TextEncoder().encode(JSON.stringify(payload));
+  return bytesToB64url(bytes);
+}
+
+// Dekodiert + validiert ein Fragment. Rückgabe:
+//   { state, warning }  – ladbar (warning=true: Teile korrigiert/verworfen)
+//   null                – nicht ladbar (kaputt / falsche Version)
+function decodeShare(enc) {
+  if (!enc || typeof enc !== "string") return null;
+  if (enc.length > SHARE_MAX_DECODED) return null; // übergroße Payloads ablehnen
+  let payload;
+  try {
+    const bytes = b64urlToBytes(enc);
+    if (bytes.length > SHARE_MAX_DECODED) return null;
+    payload = JSON.parse(new TextDecoder().decode(bytes));
+  } catch (e) { return null; }
+  if (!payload || typeof payload !== "object") return null;
+  if (payload.version !== SHARE_VERSION) return null; // unbekannte/veraltete Version
+  const raw = payload.state;
+  if (!raw || typeof raw !== "object") return null;
+
+  let warn = false;
+  const out = {
+    year: new Date().getFullYear(), st: "BY", vac: 30, ot: 0, xmasRule: "50",
+    uiMode: "einfach", simpleGoal: "free", simpleStarted: false,
+    schoolHolidayPreference: "neutral", autoVac: "", autoOt: "0",
+    spendFirst: "vac", autoFrom: 0, showWeekendHolidays: true, blocks: [], overridesMd: {},
+  };
+  const bad = (present) => { if (present) warn = true; };
+
+  const y = parseInt(raw.y, 10);
+  if (Number.isInteger(y) && y >= 1970 && y <= 2100) out.year = y; else bad(raw.y !== undefined);
+  if (typeof raw.st === "string" && Object.prototype.hasOwnProperty.call(STATES, raw.st)) out.st = raw.st; else bad(raw.st !== undefined);
+  const vac = Number(raw.vac); if (Number.isFinite(vac) && vac >= 0 && vac <= 366) out.vac = vac; else bad(raw.vac !== undefined);
+  const ot = Number(raw.ot); if (Number.isFinite(ot) && ot >= 0 && ot <= 366) out.ot = ot; else bad(raw.ot !== undefined);
+  if (XMAS_RULES.includes(raw.x)) out.xmasRule = raw.x; else bad(raw.x !== undefined);
+  if (UI_MODES.includes(raw.m)) out.uiMode = raw.m; else bad(raw.m !== undefined);
+  if (SIMPLE_GOALS.includes(raw.g)) out.simpleGoal = raw.g; else bad(raw.g !== undefined);
+  if (SCHOOL_PREFS.includes(raw.sh)) out.schoolHolidayPreference = raw.sh; else bad(raw.sh !== undefined);
+  if (SPEND_FIRST.includes(raw.sf)) out.spendFirst = raw.sf; else bad(raw.sf !== undefined);
+  out.simpleStarted = raw.ss === 1 || raw.ss === true;
+  out.showWeekendHolidays = raw.wh === undefined ? true : (raw.wh === 1 || raw.wh === true);
+  const af = parseInt(raw.af, 10); if (Number.isInteger(af) && af >= 0 && af <= 11) out.autoFrom = af; else bad(raw.af !== undefined);
+  out.autoVac = raw.av === "" ? "" : (Number.isFinite(Number(raw.av)) && raw.av != null ? String(raw.av) : "");
+  out.autoOt = Number.isFinite(Number(raw.ao)) && raw.ao != null ? String(raw.ao) : "0";
+
+  if (Array.isArray(raw.b)) {
+    if (raw.b.length > SHARE_MAX_BLOCKS) warn = true;
+    out.blocks = raw.b.slice(0, SHARE_MAX_BLOCKS).map((t) => {
+      const a = Array.isArray(t) ? t : [];
+      const len = Number(a[0]);
+      const mo = a[1], otv = a[2];
+      return {
+        len: Number.isFinite(len) && len >= 1 ? len : 9,
+        month: mo === "" || mo == null ? "" : (Number.isInteger(parseInt(mo, 10)) ? String(parseInt(mo, 10)) : ""),
+        ot: otv === "" || otv == null ? "" : String(Number(otv) || 0),
+      };
+    });
+  } else bad(raw.b !== undefined);
+
+  // Overrides einlesen + Konflikte erkennen: taucht ein Datum in mehreren
+  // Kategorien auf, wird es NICHT stillschweigend übernommen, sondern
+  // vollständig verworfen und als Hinweis markiert. Doppelte Datumswerte
+  // innerhalb einer Kategorie werden dedupliziert.
+  const ovIn = raw.ov && typeof raw.ov === "object" ? raw.ov : {};
+  const seen = {}; // md -> "vac"|"ot"|"none"|"CONFLICT"
+  const readList = (list, type) => {
+    if (list === undefined) return;
+    if (!Array.isArray(list)) { warn = true; return; }
+    for (const md of list) {
+      if (!isValidMd(md, out.year)) { warn = true; continue; }
+      if (seen[md] === undefined) seen[md] = type;
+      else if (seen[md] !== type) { seen[md] = "CONFLICT"; warn = true; }
+    }
+  };
+  readList(ovIn.v, "vac");
+  readList(ovIn.o, "ot");
+  readList(ovIn.n, "none");
+  let count = 0;
+  for (const [md, type] of Object.entries(seen)) {
+    if (type === "CONFLICT") continue;
+    if (count >= SHARE_MAX_OVERRIDES) { warn = true; break; }
+    out.overridesMd[md] = type; count++;
+  }
+
+  return { state: out, warning: warn };
+}
+
+// Liest das aktuelle URL-Fragment (#plan=...) und liefert den validierten Zustand.
+function readSharedPlan(hash) {
+  try {
+    const h = (hash != null ? hash : (typeof window !== "undefined" ? window.location.hash : "")) || "";
+    const i = h.indexOf("plan=");
+    if (i === -1) return null;
+    let frag = h.slice(i + 5);
+    const amp = frag.indexOf("&"); if (amp !== -1) frag = frag.slice(0, amp);
+    return decodeShare(frag);
+  } catch (e) { return null; }
+}
+
+/* ------------------------------------------------------------------ */
 /* App                                                                 */
 /* ------------------------------------------------------------------ */
 
 function Urlaubsplaner() {
   const currentYear = new Date().getFullYear();
-  const [year, setYear] = useState(currentYear);
+  // Geteilte Planung EINMAL synchron aus dem URL-Fragment lesen – vor dem ersten
+  // Render. Dadurch werden alle States direkt korrekt initialisiert und weder
+  // Standardwerte noch Effekte können den geladenen Zustand überschreiben
+  // (verhindert Race Conditions). "had" = es lag ein #plan=-Fragment vor.
+  const sharedRef = useRef(undefined);
+  if (sharedRef.current === undefined) {
+    const hash = typeof window !== "undefined" ? (window.location.hash || "") : "";
+    sharedRef.current = { parsed: readSharedPlan(hash), had: hash.indexOf("plan=") !== -1 };
+  }
+  const shared = sharedRef.current.parsed ? sharedRef.current.parsed.state : null;
+
+  const [year, setYear] = useState(shared ? shared.year : currentYear);
   const [dark, setDark] = useState(true); // Dark-Mode ist Standard, umschaltbar im Kopfbereich
-  const [st, setSt] = useState("BY");
-  const [vac, setVac] = useState(30);
-  const [ot, setOt] = useState(0);
-  const [xmasRule, setXmasRule] = useState("50"); // Standard: halber Urlaubstag am 24./31.12.
-  const [showWeekendHolidays, setShowWeekendHolidays] = useState(true);
-  const [blocks, setBlocks] = useState([]);
+  const [st, setSt] = useState(shared ? shared.st : "BY");
+  const [vac, setVac] = useState(shared ? shared.vac : 30);
+  const [ot, setOt] = useState(shared ? shared.ot : 0);
+  const [xmasRule, setXmasRule] = useState(shared ? shared.xmasRule : "50"); // Standard: halber Urlaubstag am 24./31.12.
+  const [showWeekendHolidays, setShowWeekendHolidays] = useState(shared ? shared.showWeekendHolidays : true);
+  const [blocks, setBlocks] = useState(shared ? shared.blocks : []);
   // Budget der automatischen Verteilung; "" = automatisch das Minimum nutzen
-  const [autoVac, setAutoVac] = useState("");
-  const [autoOt, setAutoOt] = useState("0");
-  const [spendFirst, setSpendFirst] = useState("vac"); // "vac" | "ot"
-  const [autoFrom, setAutoFrom] = useState(0); // Automatik plant ab diesem Monat (0 = Januar)
+  const [autoVac, setAutoVac] = useState(shared ? shared.autoVac : "");
+  const [autoOt, setAutoOt] = useState(shared ? shared.autoOt : "0");
+  const [spendFirst, setSpendFirst] = useState(shared ? shared.spendFirst : "vac"); // "vac" | "ot"
+  const [autoFrom, setAutoFrom] = useState(shared ? shared.autoFrom : 0); // Automatik plant ab diesem Monat (0 = Januar)
   // Schulferien-Präferenz – gemeinsame Variable für Einfach- UND Profi-Modus
-  const [schoolHolidayPreference, setSchoolHolidayPreference] = useState("neutral"); // prefer | avoid | neutral
+  const [schoolHolidayPreference, setSchoolHolidayPreference] = useState(shared ? shared.schoolHolidayPreference : "neutral"); // prefer | avoid | neutral
   // Manuelles Planen per Klick im Kalender
   const [clickMode, setClickMode] = useState("vac"); // Klick setzt "vac" | "ot"
-  const [overrides, setOverrides] = useState({}); // "jahr:m-d" -> "vac" | "ot" | "none"
+  // Manuelle Tage aus dem Link mit dem geteilten Jahr rekonstruieren ("jahr:m-d").
+  const [overrides, setOverrides] = useState(() => {
+    if (!shared) return {};
+    const o = {};
+    for (const [md, val] of Object.entries(shared.overridesMd || {})) o[`${shared.year}:${md}`] = val;
+    return o;
+  }); // "jahr:m-d" -> "vac" | "ot" | "none"
+  // Teilen-UI: kurze Bestätigung (Toast) und Fallback-Dialog zum manuellen Kopieren
+  const [toast, setToast] = useState(null);
+  const [copyUrl, setCopyUrl] = useState(null);
+  const toastTimer = useRef(null);
   const [dialogDay, setDialogDay] = useState(null); // Index des angeklickten geplanten Tags
   const [drag, setDrag] = useState(null); // { anchor, current } während einer Zieh-Auswahl
   const [vacTip, setVacTip] = useState(null); // { text } – Ferien-Info per Antippen (mobil)
   // Einfach-/Profi-Modus: neuer UI-Modus, die Logik bleibt unverändert
-  const [uiMode, setUiMode] = useState("einfach"); // "einfach" | "profi"
-  const [simpleGoal, setSimpleGoal] = useState("free"); // free | blocks | short
-  const [simpleStarted, setSimpleStarted] = useState(false);
+  const [uiMode, setUiMode] = useState(shared ? shared.uiMode : "einfach"); // "einfach" | "profi"
+  const [simpleGoal, setSimpleGoal] = useState(shared ? shared.simpleGoal : "free"); // free | blocks | short
+  const [simpleStarted, setSimpleStarted] = useState(shared ? shared.simpleStarted : false);
   const [showSimpleCal, setShowSimpleCal] = useState(false);
   // Eingeklappte Bereiche pro Gerät merken; Standard: mobil nur "Allgemein" offen
   const [panels, setPanels] = useState(() => {
@@ -648,6 +843,83 @@ function Urlaubsplaner() {
     setDialogDay(null);
   };
 
+  /* --- Teilen --- */
+  const showToast = (msg) => {
+    setToast(msg);
+    if (toastTimer.current) clearTimeout(toastTimer.current);
+    toastTimer.current = setTimeout(() => setToast(null), 3500);
+  };
+
+  // Nur aktuelle Eingaben serialisieren; ableitbare Daten (Feiertage,
+  // Schulferien, Plan) bleiben draußen. yearOverrides = manuelle Tage des Jahres.
+  const buildShareUrl = () => {
+    const payload = buildSharePayload({
+      year, st, vac: num(vac), ot: num(ot), xmasRule,
+      uiMode, simpleGoal, simpleStarted, schoolHolidayPreference,
+      autoVac, autoOt, spendFirst, autoFrom, showWeekendHolidays,
+      blocks, overridesMd: yearOverrides,
+    });
+    const enc = encodeShare(payload);
+    return `${window.location.origin}${window.location.pathname}#plan=${enc}`;
+  };
+
+  const handleShare = async () => {
+    let url;
+    try { url = buildShareUrl(); }
+    catch (e) { showToast("Link konnte nicht erstellt werden."); return; }
+    if (url.length > SHARE_MAX_URL) { showToast("Planung zu umfangreich für einen Link."); return; }
+    const shareData = {
+      title: `Urlaubsplanung ${year}`,
+      text: `Meine Urlaubsplanung ${year} (${STATES[st]}) – im Urlaubsplaner öffnen:`,
+      url,
+    };
+    // 1) Nativer Teilen-Dialog (Mobil/unterstützte Geräte)
+    if (typeof navigator !== "undefined" && navigator.share &&
+        (!navigator.canShare || navigator.canShare(shareData))) {
+      try { await navigator.share(shareData); return; }
+      catch (e) { if (e && e.name === "AbortError") return; /* sonst Fallback */ }
+    }
+    // 2) Clipboard-API
+    if (typeof navigator !== "undefined" && navigator.clipboard && navigator.clipboard.writeText) {
+      try { await navigator.clipboard.writeText(url); showToast("Link wurde kopiert."); return; }
+      catch (e) { /* Fallback */ }
+    }
+    // 3) Manuelles Kopieren anbieten
+    setCopyUrl(url);
+  };
+
+  const copyFromModal = async () => {
+    try {
+      if (typeof navigator !== "undefined" && navigator.clipboard && navigator.clipboard.writeText) {
+        await navigator.clipboard.writeText(copyUrl);
+      } else {
+        const inp = document.getElementById("share-url-input");
+        if (inp) { inp.focus(); inp.select(); document.execCommand("copy"); }
+      }
+      showToast("Link wurde kopiert.");
+      setCopyUrl(null);
+    } catch (e) {
+      showToast("Bitte den Link manuell markieren und kopieren.");
+    }
+  };
+
+  // Beim Start: Hinweis zeigen, wenn eine geteilte Planung geladen wurde, und
+  // das Fragment aus der Adresszeile entfernen (sauberes erneutes Teilen/Reload).
+  useEffect(() => {
+    const s = sharedRef.current;
+    if (s && (s.parsed || s.had)) {
+      showToast(!s.parsed
+        ? "Die geteilte Planung konnte nicht vollständig geladen werden."
+        : s.parsed.warning
+          ? "Geteilte Planung wurde teilweise geladen."
+          : "Geteilte Planung wurde geladen.");
+      try { window.history.replaceState(null, "", window.location.pathname + window.location.search); }
+      catch (e) { /* z. B. sandboxed Vorschau */ }
+    }
+    return () => { if (toastTimer.current) clearTimeout(toastTimer.current); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // Export eines freien Zeitraums als Kalendereintrag (ganztägig, Ende exklusiv)
   const ymdOf = (day) => `${year}${String(day.m + 1).padStart(2, "0")}${String(day.d).padStart(2, "0")}`;
   const ymdAfter = (day) => {
@@ -854,8 +1126,19 @@ function Urlaubsplaner() {
               </button>
             ))}
           </div>
+          <button onClick={handleShare}
+            className="self-start inline-flex items-center gap-1.5 rounded-md border border-slate-600 px-2.5 py-1 text-xs font-semibold text-slate-300 hover:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-emerald-500"
+            aria-label="Aktuelle Planung als Link teilen"
+            title="Aktuelle Planung als Link teilen">
+            <svg aria-hidden="true" viewBox="0 0 24 24" width="14" height="14" fill="none"
+              stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="18" cy="5" r="3" /><circle cx="6" cy="12" r="3" /><circle cx="18" cy="19" r="3" />
+              <line x1="8.6" y1="10.6" x2="15.4" y2="6.4" /><line x1="8.6" y1="13.4" x2="15.4" y2="17.6" />
+            </svg>
+            Planung teilen
+          </button>
           <button onClick={() => setDark(!dark)}
-            className="self-start rounded-md border border-slate-600 px-2.5 py-1 text-xs font-semibold text-slate-300 hover:bg-slate-800"
+            className="self-start rounded-md border border-slate-600 px-2.5 py-1 text-xs font-semibold text-slate-300 hover:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-emerald-500"
             title="Zwischen Dark-Mode und hellem Modus umschalten">
             {dark ? "\u2600\ufe0f Heller Modus" : "\ud83c\udf19 Dark-Mode"}
           </button>
@@ -1390,6 +1673,43 @@ function Urlaubsplaner() {
               </button>
             </div>
           </div>
+        </div>
+      )}
+
+      {/* Fallback-Dialog: Link manuell kopieren (wenn navigator.share und
+          Clipboard-API nicht verfügbar sind) */}
+      {copyUrl && (
+        <div role="dialog" aria-modal="true" aria-label="Planung teilen"
+          className={`fixed inset-0 z-[60] flex items-center justify-center p-4 ${dark ? "bg-black/60" : "bg-slate-900/40"}`}
+          onClick={() => setCopyUrl(null)}>
+          <div className={`w-full max-w-md rounded-xl p-4 shadow-xl space-y-3 ${dark ? "bg-slate-900 border border-slate-700" : "bg-white"}`}
+            onClick={(e) => e.stopPropagation()}>
+            <p className="text-sm font-bold">Planung teilen</p>
+            <p className={`text-[11px] leading-snug ${dark ? "text-slate-400" : "text-slate-500"}`}>
+              Der Link enthält deine Planungseinstellungen. Jeder mit diesem Link kann die Planung öffnen.
+            </p>
+            <label htmlFor="share-url-input" className="sr-only">Teilbarer Link</label>
+            <input id="share-url-input" readOnly value={copyUrl}
+              onFocus={(e) => e.target.select()} className={inputCls} />
+            <div className="flex gap-2">
+              <button onClick={copyFromModal}
+                className="flex-1 rounded-md bg-emerald-600 px-3 py-2 text-sm font-semibold text-white hover:bg-emerald-700 focus:outline-none focus:ring-2 focus:ring-emerald-500">
+                Link kopieren
+              </button>
+              <button onClick={() => setCopyUrl(null)}
+                className={`rounded-md px-3 py-2 text-sm ${dark ? "text-slate-400 hover:bg-slate-800" : "text-slate-500 hover:bg-slate-100"}`}>
+                Schließen
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Kurze Statusmeldung (Screenreader-freundlich) */}
+      {toast && (
+        <div role="status" aria-live="polite"
+          className="fixed bottom-4 left-1/2 -translate-x-1/2 z-[70] rounded-lg border border-slate-700 bg-slate-900 px-4 py-2 text-sm text-white shadow-lg">
+          {toast}
         </div>
       )}
     </div>
