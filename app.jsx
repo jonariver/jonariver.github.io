@@ -277,26 +277,45 @@ function plan(days, cfg) {
     if (gaps.length === 0) break;
     // ROI-Stufe: nur die Lücken mit den geringsten Kosten kommen infrage
     const minTier = Math.min(...gaps.map((g) => Math.ceil(g.c - 1e-9)));
-    // Anteil der Ferientage einer Lücke (0..1) – nur bei aktiver Präferenz relevant
+    // Anteil der Ferientage einer Lücke (0..1). Bei "neutral" ist der Ferienwert
+    // per Definition exakt 0 (share wird gar nicht erst berechnet).
     const vacShare = (g) => {
       if (holidayPref === "neutral") return 0;
       let hit = 0, tot = 0;
       for (let k = g.s; k <= g.e; k++) { tot++; if (vacSet[`${days[k].m}-${days[k].d}`]) hit++; }
       return tot ? hit / tot : 0;
     };
+    // Additives Scoring: Der Ferienwert fließt als eigener Summand in die
+    // Bewertung ein und kann so – anders als ein reiner Tie-Breaker – die
+    // Auswahl zwischen ähnlich effizienten Lücken tatsächlich kippen.
+    // prefer und avoid nutzen exakt spiegelbildliche Gewichte (+W · share
+    // gegenüber −W · share); bei "neutral" ist der Zusatzterm 0.
+    const HOLIDAY_WEIGHT = 1.2;
+    const holidayScore = (g) => {
+      if (holidayPref === "neutral") return 0;
+      const signed = holidayPref === "prefer" ? vacShare(g) : -vacShare(g);
+      return HOLIDAY_WEIGHT * signed;
+    };
+    const score = (g) => g.eff + holidayScore(g);
     const tier = gaps
       .filter((g) => Math.ceil(g.c - 1e-9) === minTier)
-      // Bei neutral identische Sortierung wie bisher (Zusatzterm entfällt).
-      // prefer: mehr Ferientage zuerst; avoid: weniger Ferientage zuerst.
-      .sort((a, b) => {
-        if (holidayPref !== "neutral") {
-          const d = holidayPref === "prefer"
-            ? vacShare(b) - vacShare(a)
-            : vacShare(a) - vacShare(b);
-          if (Math.abs(d) > 1e-9) return d;
-        }
-        return b.eff - a.eff || a.s - b.s;
-      });
+      // Primärkriterium ist der Gesamtscore (Effizienz + Ferienwert), erst
+      // danach reine Effizienz und Position als Tie-Breaker.
+      .sort((a, b) => score(b) - score(a) || b.eff - a.eff || a.s - b.s);
+
+    // Vorübergehende Debug-Ausgabe je betrachteter Lücke (nur bei aktiver
+    // Präferenz), zeigt Ferienüberschneidung, Feriengewichtung und Gesamtscore.
+    if (cfg.debugHolidayScoring && holidayPref !== "neutral") {
+      for (const g of tier) {
+        const share = vacShare(g);
+        console.log(
+          `[Ferien-Debug] ${holidayPref} Lücke Tag ${g.s}-${g.e} (Monat ${g.month + 1})` +
+          ` | Kosten ${g.c.toFixed(1)} | eff ${g.eff.toFixed(2)}` +
+          ` | Ferienanteil ${(share * 100).toFixed(0)}% | Feriengewicht ${holidayScore(g).toFixed(2)}` +
+          ` | Gesamtscore ${score(g).toFixed(2)}`
+        );
+      }
+    }
     let pick = tier.find((g) => !usedMonths.has(g.month));
     if (!pick) { usedMonths = new Set(); pick = tier[0]; } // neue Verteilrunde
     usedMonths.add(pick.month);
@@ -414,13 +433,16 @@ function InfoHint({ text, dark }) {
    Farben, Legende, Tooltips, Kontingente) wird beim Laden deterministisch
    über plan(days,cfg) neu berechnet. Feiertage und Schulferien werden aus
    Jahr + Bundesland erneut geladen und daher NICHT im Link abgelegt.
-   Manuelle Tage (overrides) werden 1:1 gespeichert und beim Laden nie
-   verändert. Kodiert ist base64url(JSON) – kompakt, unicode-sicher und
-   synchron dekodierbar (dadurch kein Race beim Initialisieren). */
+
+   Format:
+   - Neu:    #p=<base64url(deflate(JSON))>   – kompakt, via CompressionStream
+   - Alt:    #plan=<base64url(JSON)>         – unverändert lesbar (Abwärtskompat.)
+   Ist CompressionStream/DecompressionStream nicht verfügbar, wird beim
+   Erstellen automatisch das alte #plan=-Verfahren genutzt. */
 
 const SHARE_VERSION = 1;
 const SHARE_MAX_URL = 8000;        // praktische URL-Obergrenze
-const SHARE_MAX_DECODED = 100000;  // Schutz vor übermäßig großen Payloads
+const SHARE_MAX_DECODED = 100000;  // Schutz vor übermäßig großen (auch dekomprimierten) Payloads
 const SHARE_MAX_OVERRIDES = 400;   // Obergrenze manueller Tage
 const SHARE_MAX_BLOCKS = 20;
 
@@ -429,6 +451,11 @@ const UI_MODES = ["einfach", "profi"];
 const SIMPLE_GOALS = ["free", "blocks", "short"];
 const SCHOOL_PREFS = ["prefer", "avoid", "neutral"];
 const SPEND_FIRST = ["vac", "ot"];
+
+// Kompression nur nutzen, wenn beide Stream-APIs vorhanden sind
+// (Chrome/Edge ≥80, Firefox ≥113, Safari ≥16.4 – Desktop und Mobil).
+const HAS_COMPRESSION =
+  typeof CompressionStream !== "undefined" && typeof DecompressionStream !== "undefined";
 
 // Bytes <-> base64url. TextEncoder/Decoder sorgen für korrekte Unicode-Behandlung.
 function bytesToB64url(bytes) {
@@ -442,6 +469,26 @@ function b64urlToBytes(s) {
   const out = new Uint8Array(bin.length);
   for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
   return out;
+}
+
+// JSON-String -> deflate -> base64url. Asynchron (Stream-API).
+// Über Blob().stream().pipeThrough() geführt: eine einzige awaitbare Rejection,
+// keine hängenden Writer-Promises (die bei kaputten Daten sonst als
+// unhandledRejection auftauchen würden).
+async function deflateToB64url(str) {
+  const stream = new Blob([new TextEncoder().encode(str)]).stream()
+    .pipeThrough(new CompressionStream("deflate"));
+  const buf = await new Response(stream).arrayBuffer();
+  return bytesToB64url(new Uint8Array(buf));
+}
+// base64url(deflate) -> inflate -> JSON-String. Asynchron (Stream-API).
+// Wirft bei beschädigten Daten – der Aufrufer fängt das ab und meldet den Link
+// als nicht lesbar.
+async function inflateFromB64url(b64) {
+  const stream = new Blob([b64urlToBytes(b64)]).stream()
+    .pipeThrough(new DecompressionStream("deflate"));
+  const buf = await new Response(stream).arrayBuffer();
+  return new TextDecoder().decode(buf);
 }
 
 // "m-d" (m 0-basiert) prüfen – inkl. echter Kalenderprüfung fürs Jahr,
@@ -480,23 +527,20 @@ function buildSharePayload(s) {
   };
 }
 
-function encodeShare(payload) {
-  const bytes = new TextEncoder().encode(JSON.stringify(payload));
-  return bytesToB64url(bytes);
+// JSON-Payload -> base64url (unkomprimiert, für das alte #plan=-Format).
+function encodePlain(payload) {
+  return bytesToB64url(new TextEncoder().encode(JSON.stringify(payload)));
 }
 
-// Dekodiert + validiert ein Fragment. Rückgabe:
+// Validiert einen bereits dekodierten JSON-String (gilt für beide Formate:
+// #plan= liefert ihn synchron über atob, #p= asynchron über inflate).
+// Rückgabe:
 //   { state, warning }  – ladbar (warning=true: Teile korrigiert/verworfen)
-//   null                – nicht ladbar (kaputt / falsche Version)
-function decodeShare(enc) {
-  if (!enc || typeof enc !== "string") return null;
-  if (enc.length > SHARE_MAX_DECODED) return null; // übergroße Payloads ablehnen
+//   null                – nicht ladbar (kaputt / falsche Version / zu groß)
+function validateSharePayload(jsonStr) {
+  if (typeof jsonStr !== "string" || jsonStr.length > SHARE_MAX_DECODED) return null;
   let payload;
-  try {
-    const bytes = b64urlToBytes(enc);
-    if (bytes.length > SHARE_MAX_DECODED) return null;
-    payload = JSON.parse(new TextDecoder().decode(bytes));
-  } catch (e) { return null; }
+  try { payload = JSON.parse(jsonStr); } catch (e) { return null; }
   if (!payload || typeof payload !== "object") return null;
   if (payload.version !== SHARE_VERSION) return null; // unbekannte/veraltete Version
   const raw = payload.state;
@@ -569,16 +613,39 @@ function decodeShare(enc) {
   return { state: out, warning: warn };
 }
 
-// Liest das aktuelle URL-Fragment (#plan=...) und liefert den validierten Zustand.
-function readSharedPlan(hash) {
+// Synchroner Dekoder für das alte #plan=-Format (base64url(JSON)).
+function decodeShare(enc) {
+  if (!enc || typeof enc !== "string" || enc.length > SHARE_MAX_DECODED) return null;
+  let jsonStr;
   try {
-    const h = (hash != null ? hash : (typeof window !== "undefined" ? window.location.hash : "")) || "";
-    const i = h.indexOf("plan=");
-    if (i === -1) return null;
-    let frag = h.slice(i + 5);
-    const amp = frag.indexOf("&"); if (amp !== -1) frag = frag.slice(0, amp);
-    return decodeShare(frag);
+    const bytes = b64urlToBytes(enc);
+    if (bytes.length > SHARE_MAX_DECODED) return null;
+    jsonStr = new TextDecoder().decode(bytes);
   } catch (e) { return null; }
+  return validateSharePayload(jsonStr);
+}
+
+// Wert eines Schlüssels aus dem URL-Fragment lesen (robust ggü. mehreren
+// &-getrennten Parametern; "p" und "plan" werden exakt unterschieden).
+function getHashParam(hash, key) {
+  const h = (hash || "").replace(/^#/, "");
+  for (const part of h.split("&")) {
+    const eq = part.indexOf("=");
+    if (eq === -1) continue;
+    if (part.slice(0, eq) === key) return part.slice(eq + 1);
+  }
+  return null;
+}
+
+// Erkennt das im Fragment vorliegende Format. #p= (komprimiert) hat Vorrang.
+// Rückgabe: { type: "p"|"plan", raw } oder null.
+function readShareFragment(hash) {
+  const h = (hash != null ? hash : (typeof window !== "undefined" ? window.location.hash : "")) || "";
+  const p = getHashParam(h, "p");
+  if (p != null && p !== "") return { type: "p", raw: p };
+  const legacy = getHashParam(h, "plan");
+  if (legacy != null && legacy !== "") return { type: "plan", raw: legacy };
+  return null;
 }
 
 /* ------------------------------------------------------------------ */
@@ -587,14 +654,16 @@ function readSharedPlan(hash) {
 
 function Urlaubsplaner() {
   const currentYear = new Date().getFullYear();
-  // Geteilte Planung EINMAL synchron aus dem URL-Fragment lesen – vor dem ersten
-  // Render. Dadurch werden alle States direkt korrekt initialisiert und weder
-  // Standardwerte noch Effekte können den geladenen Zustand überschreiben
-  // (verhindert Race Conditions). "had" = es lag ein #plan=-Fragment vor.
+  // Geteilte Planung EINMAL aus dem URL-Fragment lesen, bevor die States
+  // initialisiert werden. Das alte #plan=-Format wird synchron dekodiert und
+  // fließt direkt in die useState-Initialwerte (kein Flackern, keine Race).
+  // Das neue #p=-Format ist deflate-komprimiert und lässt sich nur asynchron
+  // (DecompressionStream) lesen; es wird daher erst im Mount-Effekt angewendet.
   const sharedRef = useRef(undefined);
   if (sharedRef.current === undefined) {
-    const hash = typeof window !== "undefined" ? (window.location.hash || "") : "";
-    sharedRef.current = { parsed: readSharedPlan(hash), had: hash.indexOf("plan=") !== -1 };
+    const frag = readShareFragment(typeof window !== "undefined" ? window.location.hash : "");
+    const parsed = frag && frag.type === "plan" ? decodeShare(frag.raw) : null;
+    sharedRef.current = { frag, parsed, had: !!frag };
   }
   const shared = sharedRef.current.parsed ? sharedRef.current.parsed.state : null;
 
@@ -626,6 +695,7 @@ function Urlaubsplaner() {
   const [toast, setToast] = useState(null);
   const [copyUrl, setCopyUrl] = useState(null);
   const toastTimer = useRef(null);
+  const shareUrlRef = useRef(null); // vorab erzeugter (komprimierter) Link – für Safari/iOS-Aktivierung
   const [dialogDay, setDialogDay] = useState(null); // Index des angeklickten geplanten Tags
   const [drag, setDrag] = useState(null); // { anchor, current } während einer Zieh-Auswahl
   const [vacTip, setVacTip] = useState(null); // { text } – Ferien-Info per Antippen (mobil)
@@ -852,21 +922,48 @@ function Urlaubsplaner() {
 
   // Nur aktuelle Eingaben serialisieren; ableitbare Daten (Feiertage,
   // Schulferien, Plan) bleiben draußen. yearOverrides = manuelle Tage des Jahres.
-  const buildShareUrl = () => {
-    const payload = buildSharePayload({
+  const currentSharePayload = () =>
+    buildSharePayload({
       year, st, vac: num(vac), ot: num(ot), xmasRule,
       uiMode, simpleGoal, simpleStarted, schoolHolidayPreference,
       autoVac, autoOt, spendFirst, autoFrom, showWeekendHolidays,
       blocks, overridesMd: yearOverrides,
     });
-    const enc = encodeShare(payload);
-    return `${window.location.origin}${window.location.pathname}#plan=${enc}`;
+  const shareBaseUrl = () => `${window.location.origin}${window.location.pathname}`;
+
+  // Synchroner Fallback: unkomprimierter #plan=-Link (immer verfügbar).
+  const buildShareUrl = () => `${shareBaseUrl()}#plan=${encodePlain(currentSharePayload())}`;
+
+  // Bevorzugt der kompakte, komprimierte #p=-Link. Ohne CompressionStream
+  // (oder bei Fehler) automatisch der alte #plan=-Weg.
+  const buildShareUrlCompressed = async () => {
+    const payload = currentSharePayload();
+    if (HAS_COMPRESSION) {
+      try { return `${shareBaseUrl()}#p=${await deflateToB64url(JSON.stringify(payload))}`; }
+      catch (e) { /* auf #plan= zurückfallen */ }
+    }
+    return `${shareBaseUrl()}#plan=${encodePlain(payload)}`;
+  };
+
+  // Geteilten (validierten) Zustand auf die States anwenden – nur für den
+  // asynchronen #p=-Pfad; #plan= ist bereits in den Initialwerten enthalten.
+  const applySharedState = (s) => {
+    setYear(s.year); setSt(s.st); setVac(s.vac); setOt(s.ot); setXmasRule(s.xmasRule);
+    setUiMode(s.uiMode); setSimpleGoal(s.simpleGoal); setSimpleStarted(s.simpleStarted);
+    setSchoolHolidayPreference(s.schoolHolidayPreference);
+    setAutoVac(s.autoVac); setAutoOt(s.autoOt); setSpendFirst(s.spendFirst);
+    setAutoFrom(s.autoFrom); setShowWeekendHolidays(s.showWeekendHolidays); setBlocks(s.blocks);
+    const o = {};
+    for (const [md, val] of Object.entries(s.overridesMd || {})) o[`${s.year}:${md}`] = val;
+    setOverrides(o);
   };
 
   const handleShare = async () => {
-    let url;
-    try { url = buildShareUrl(); }
-    catch (e) { showToast("Link konnte nicht erstellt werden."); return; }
+    // Vorab erzeugten (i. d. R. komprimierten) Link nutzen, damit vor
+    // navigator.share/clipboard KEIN await steht – sonst verliert u. a. Safari
+    // die User-Aktivierung. Fehlt der Vorab-Link, synchron den #plan=-Fallback.
+    let url = shareUrlRef.current;
+    if (!url) { try { url = buildShareUrl(); } catch (e) { showToast("Link konnte nicht erstellt werden."); return; } }
     if (url.length > SHARE_MAX_URL) { showToast("Planung zu umfangreich für einen Link."); return; }
     const shareData = {
       title: `Urlaubsplanung ${year}`,
@@ -903,20 +1000,61 @@ function Urlaubsplaner() {
     }
   };
 
-  // Beim Start: Hinweis zeigen, wenn eine geteilte Planung geladen wurde, und
-  // das Fragment aus der Adresszeile entfernen (sauberes erneutes Teilen/Reload).
+  // Den (komprimierten) Teilen-Link vorab im Hintergrund erzeugen, sobald sich
+  // relevante Eingaben ändern. So liegt er beim Klick synchron bereit.
   useEffect(() => {
-    const s = sharedRef.current;
-    if (s && (s.parsed || s.had)) {
-      showToast(!s.parsed
-        ? "Die geteilte Planung konnte nicht vollständig geladen werden."
-        : s.parsed.warning
-          ? "Geteilte Planung wurde teilweise geladen."
-          : "Geteilte Planung wurde geladen.");
+    let cancelled = false;
+    (async () => {
+      try {
+        const url = await buildShareUrlCompressed();
+        if (!cancelled) shareUrlRef.current = url;
+      } catch (e) { if (!cancelled) shareUrlRef.current = null; }
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [year, st, vac, ot, xmasRule, uiMode, simpleGoal, simpleStarted,
+      schoolHolidayPreference, autoVac, autoOt, spendFirst, autoFrom,
+      showWeekendHolidays, blocks, yearOverrides]);
+
+  // Beim Start: geteilte Planung anwenden (bei #p= asynchron dekomprimieren),
+  // Hinweis zeigen und das Fragment aus der Adresszeile entfernen (sauberes
+  // erneutes Teilen/Reload).
+  useEffect(() => {
+    const info = sharedRef.current;
+    const clearFragment = () => {
       try { window.history.replaceState(null, "", window.location.pathname + window.location.search); }
       catch (e) { /* z. B. sandboxed Vorschau */ }
+    };
+    const toastFor = (res) => showToast(
+      !res ? "Die geteilte Planung konnte nicht geladen werden."
+        : res.warning ? "Geteilte Planung wurde teilweise geladen."
+        : "Geteilte Planung wurde geladen."
+    );
+    if (!info || !info.had) {
+      return () => { if (toastTimer.current) clearTimeout(toastTimer.current); };
     }
-    return () => { if (toastTimer.current) clearTimeout(toastTimer.current); };
+    if (info.frag.type === "plan") {
+      // Bereits synchron in die Initialwerte geflossen – nur Hinweis + aufräumen.
+      toastFor(info.parsed);
+      clearFragment();
+      return () => { if (toastTimer.current) clearTimeout(toastTimer.current); };
+    }
+    // info.frag.type === "p": komprimiert -> asynchron dekomprimieren + anwenden
+    let cancelled = false;
+    (async () => {
+      let res = null;
+      try {
+        if (info.frag.raw.length <= SHARE_MAX_DECODED) {
+          const json = await inflateFromB64url(info.frag.raw);
+          res = validateSharePayload(json);
+        }
+      } catch (e) { res = null; }
+      if (cancelled) return;
+      if (res && res.state) applySharedState(res.state);
+      toastFor(res);
+      clearFragment();
+    })();
+    return () => { cancelled = true; if (toastTimer.current) clearTimeout(toastTimer.current); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -1138,7 +1276,7 @@ function Urlaubsplaner() {
             Planung teilen
           </button>
           <button onClick={() => setDark(!dark)}
-            className="self-start rounded-md border border-slate-600 px-2.5 py-1 text-xs font-semibold text-slate-300 hover:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-emerald-500"
+            className="self-start rounded-md border border-slate-600 px-2.5 py-1 text-xs font-semibold text-slate-300 hover:bg-slate-800"
             title="Zwischen Dark-Mode und hellem Modus umschalten">
             {dark ? "\u2600\ufe0f Heller Modus" : "\ud83c\udf19 Dark-Mode"}
           </button>
