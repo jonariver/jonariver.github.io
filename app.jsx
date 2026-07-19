@@ -1219,7 +1219,7 @@ function Urlaubsplaner() {
               const lead = (mDays[0].dow + 6) % 7; // Woche beginnt Montag
               return (
                 <div key={m} ref={(el) => { monthRefs.current[m] = el; }}
-                  className={`${cardCls} p-3 transition-shadow duration-300 ${
+                  className={`${cardCls} p-3 scroll-mt-24 transition-shadow duration-300 ${
                     highlightedMonth === m ? (dark ? "ring-2 ring-emerald-400" : "ring-2 ring-emerald-500") : ""
                   }`}>
                   <h3 className="text-sm font-bold mb-2">{mName}</h3>
@@ -1579,10 +1579,13 @@ function Urlaubsplaner() {
                             onClick={() => scrollToPeriod(p)}
                             onKeyDown={(e) => onRowKeyDown(e, p)}
                             title="Zum Monat im Kalender springen"
-                            className="py-2 flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 text-sm cursor-pointer rounded-md focus:outline-none focus:ring-2 focus:ring-emerald-500">
+                            className={`py-2 flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 text-sm cursor-pointer rounded-md focus:outline-none focus:ring-2 focus:ring-emerald-500 ${
+                              dark ? "active:bg-slate-800/60" : "active:bg-slate-100"
+                            }`}>
                             <span className="font-medium">{fmtDate(days[p.s])} – {fmtDate(days[p.e])}</span>
-                            <span className={`tabular-nums ${dark ? "text-slate-400" : "text-slate-500"}`}>
-                              {p.len} freie Tage · {fmtNum(p.vac)} Urlaubstag{p.vac === 1 ? "" : "e"}
+                            <span className={`tabular-nums flex items-center gap-1 ${dark ? "text-slate-400" : "text-slate-500"}`}>
+                              <span>{p.len} freie Tage · {fmtNum(p.vac)} Urlaubstag{p.vac === 1 ? "" : "e"}</span>
+                              <span aria-hidden="true" className={dark ? "text-slate-600" : "text-slate-300"}>›</span>
                             </span>
                             {reasonLines(p)}
                           </li>
@@ -1827,7 +1830,9 @@ function Urlaubsplaner() {
                     onClick={() => scrollToPeriod(p)}
                     onKeyDown={(e) => onRowKeyDown(e, p)}
                     title="Zum Monat im Kalender springen"
-                    className="py-2 flex flex-wrap items-center justify-between gap-x-4 gap-y-1 text-sm cursor-pointer rounded-md focus:outline-none focus:ring-2 focus:ring-emerald-500">
+                    className={`py-2 flex flex-wrap items-center justify-between gap-x-4 gap-y-1 text-sm cursor-pointer rounded-md focus:outline-none focus:ring-2 focus:ring-emerald-500 ${
+                      dark ? "active:bg-slate-800/60" : "active:bg-slate-100"
+                    }`}>
                     <span className="flex flex-wrap items-center gap-2 font-medium">
                       {fmtDate(days[p.s])} – {fmtDate(days[p.e])}
                       {p.origins.includes("block") && (
@@ -1861,6 +1866,7 @@ function Urlaubsplaner() {
                           Google
                         </a>
                       </span>
+                      <span aria-hidden="true" className={`hidden sm:inline-block ${dark ? "text-slate-600" : "text-slate-300"}`}>›</span>
                     </span>
                     {reasonLines(p)}
                   </li>
