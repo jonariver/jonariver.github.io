@@ -757,6 +757,136 @@ function readShareFragment(hash) {
 }
 
 /* ------------------------------------------------------------------ */
+/* Landing Page: Startansicht vor dem Planer (Einfach-/Profi-Modus)    */
+/* ------------------------------------------------------------------ */
+/* Rein präsentational – nutzt ausschließlich Props der Komponente
+   Urlaubsplaner (dark, cardCls, Einstiegs-Handler). Keine eigene
+   Planungslogik, kein eigener State für Eingaben; ein Klick auf einen
+   der beiden Einstiegs-Buttons wechselt nur die Ansicht (view) und
+   setzt uiMode, ohne bestehende Eingaben zurückzusetzen. */
+function LandingPage({ dark, setDark, cardCls, onStartSimple, onStartPro }) {
+  const softTextCls = dark ? "text-slate-300" : "text-slate-600";
+  const mutedTextCls = dark ? "text-slate-400" : "text-slate-500";
+  const badgeCls = dark ? "bg-emerald-900/50 text-emerald-300" : "bg-emerald-100 text-emerald-700";
+
+  return (
+    <>
+      <header className="bg-slate-900 text-white">
+        <div className="max-w-6xl mx-auto px-4 py-6 flex items-center justify-between gap-4">
+          <h1 className="text-2xl font-bold tracking-tight">{t("common.documentTitle")}</h1>
+          <button onClick={() => setDark(!dark)}
+            className="rounded-md border border-slate-600 px-2.5 py-1 text-xs font-semibold text-slate-300 hover:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-emerald-500"
+            title={t("theme.toggleTitle")}>
+            {dark ? t("theme.toLight") : t("theme.toDark")}
+          </button>
+        </div>
+      </header>
+
+      <main className="max-w-6xl mx-auto px-4 py-10 space-y-14">
+        {/* Hero */}
+        <section className="text-center max-w-2xl mx-auto space-y-4" style={{ animation: "upFade .35s ease" }}>
+          <h2 className="text-3xl sm:text-4xl font-bold tracking-tight">{t("landing.hero.heading")}</h2>
+          <p className={`text-sm sm:text-base leading-relaxed ${softTextCls}`}>{t("landing.hero.description")}</p>
+          <p className={`inline-block rounded-full px-4 py-2 text-sm font-semibold ${dark ? "bg-emerald-900/40 text-emerald-300" : "bg-emerald-50 text-emerald-700"}`}>
+            {t("landing.hero.example")}
+          </p>
+        </section>
+
+        {/* Modus-Auswahl */}
+        <section aria-labelledby="landing-modes-heading" className="space-y-4">
+          <h2 id="landing-modes-heading" className={`text-center text-xs font-bold uppercase tracking-wide ${mutedTextCls}`}>
+            {t("landing.modes.heading")}
+          </h2>
+          <div className="grid gap-4 md:grid-cols-2 items-stretch">
+            {/* Einfach-Karte: visuell stärker hervorgehoben (primärer Einstieg) */}
+            <div className={`${cardCls} p-6 flex flex-col gap-4 border-2 ${dark ? "border-emerald-600" : "border-emerald-500"}`}>
+              <div className="flex items-center gap-2 flex-wrap">
+                <h3 className="text-lg font-bold">{t("landing.modes.simple.title")}</h3>
+                <span className={`text-[10px] font-bold uppercase tracking-wide rounded-full px-2 py-0.5 ${badgeCls}`}>
+                  {t("landing.modes.simple.badge")}
+                </span>
+              </div>
+              <p className={`text-sm ${softTextCls}`}>{t("landing.modes.simple.text")}</p>
+              <ul className="text-sm space-y-1.5 flex-1">
+                {t("landing.modes.simple.benefits").map((b) => (
+                  <li key={b} className="flex items-start gap-2">
+                    <span aria-hidden="true" className="text-emerald-500">✓</span>
+                    <span className={dark ? "text-slate-300" : "text-slate-700"}>{b}</span>
+                  </li>
+                ))}
+              </ul>
+              <button onClick={onStartSimple}
+                className="w-full rounded-lg bg-emerald-600 px-4 py-3 text-sm font-bold text-white hover:bg-emerald-700 focus:outline-none focus:ring-2 focus:ring-emerald-500">
+                {t("landing.modes.simple.button")}
+              </button>
+            </div>
+
+            {/* Profi-Karte */}
+            <div className={`${cardCls} p-6 flex flex-col gap-4`}>
+              <h3 className="text-lg font-bold">{t("landing.modes.pro.title")}</h3>
+              <p className={`text-sm ${softTextCls}`}>{t("landing.modes.pro.text")}</p>
+              <ul className="text-sm space-y-1.5 flex-1">
+                {t("landing.modes.pro.benefits").map((b) => (
+                  <li key={b} className="flex items-start gap-2">
+                    <span aria-hidden="true" className={mutedTextCls}>✓</span>
+                    <span className={dark ? "text-slate-300" : "text-slate-700"}>{b}</span>
+                  </li>
+                ))}
+              </ul>
+              <button onClick={onStartPro}
+                className={`w-full rounded-lg border px-4 py-3 text-sm font-bold focus:outline-none focus:ring-2 focus:ring-emerald-500 ${
+                  dark ? "border-slate-600 text-slate-200 hover:bg-slate-800" : "border-slate-300 text-slate-700 hover:bg-slate-100"
+                }`}>
+                {t("landing.modes.pro.button")}
+              </button>
+            </div>
+          </div>
+        </section>
+
+        {/* Funktionsbereich */}
+        <section className="space-y-4">
+          <h2 className="text-center text-xl font-bold">{t("landing.features.heading")}</h2>
+          <div className="grid gap-4 sm:grid-cols-3">
+            {t("landing.features.items").map((f) => (
+              <div key={f.title} className={`${cardCls} p-5 space-y-2`}>
+                <div className="text-2xl" aria-hidden="true">{f.icon}</div>
+                <h3 className="text-sm font-bold">{f.title}</h3>
+                <p className={`text-xs leading-relaxed ${mutedTextCls}`}>{f.text}</p>
+              </div>
+            ))}
+          </div>
+        </section>
+
+        {/* Ablauf */}
+        <section className="space-y-4">
+          <h2 className="text-center text-xl font-bold">{t("landing.steps.heading")}</h2>
+          <ol className="grid gap-4 sm:grid-cols-3">
+            {t("landing.steps.items").map((s, i) => (
+              <li key={s.title} className={`${cardCls} p-5 space-y-2`}>
+                <span className={`inline-flex h-6 w-6 items-center justify-center rounded-full text-xs font-bold ${badgeCls}`}>
+                  {i + 1}
+                </span>
+                <h3 className="text-sm font-bold">{s.title}</h3>
+                <p className={`text-xs leading-relaxed ${mutedTextCls}`}>{s.text}</p>
+              </li>
+            ))}
+          </ol>
+        </section>
+
+        {/* Vertrauenshinweise */}
+        <section className={`flex flex-wrap justify-center gap-x-6 gap-y-2 text-xs ${mutedTextCls}`}>
+          {t("landing.trust.items").map((item) => (
+            <span key={item} className="inline-flex items-center gap-1.5">
+              <span aria-hidden="true" className="text-emerald-500">✓</span> {item}
+            </span>
+          ))}
+        </section>
+      </main>
+    </>
+  );
+}
+
+/* ------------------------------------------------------------------ */
 /* App                                                                 */
 /* ------------------------------------------------------------------ */
 
@@ -807,6 +937,21 @@ function Urlaubsplaner() {
   const [dialogDay, setDialogDay] = useState(null); // Index des angeklickten geplanten Tags
   const [drag, setDrag] = useState(null); // { anchor, current } während einer Zieh-Auswahl
   const [vacTip, setVacTip] = useState(null); // { text } – Ferien-Info per Antippen (mobil)
+  // Übergeordnete Ansicht: "landing" (Startansicht) | "loading" (kurzer,
+  // neutraler Zwischenzustand) | "planner" (bestehende Einfach-/Profi-
+  // Ansicht). Reines Rendering – kein Reset bestehender Eingaben beim
+  // Wechsel, nicht Teil des Share-Link-Payloads. Ein bereits synchron
+  // erkannter gültiger Share-Link (altes #plan=-Format) überspringt die
+  // Landing Page direkt. Das neue, komprimierte #p=-Format lässt sich nur
+  // asynchron dekomprimieren; damit dabei nicht kurz die Landing Page
+  // aufblitzt, startet die Ansicht in diesem Fall auf "loading" und
+  // schaltet erst nach der asynchronen Validierung auf "planner" (Erfolg)
+  // oder "landing" (ungültig/fehlgeschlagen) um (siehe Mount-Effekt unten).
+  const [view, setView] = useState(() => {
+    if (shared) return "planner";
+    if (sharedRef.current.had && sharedRef.current.frag.type === "p") return "loading";
+    return "landing";
+  });
   // Einfach-/Profi-Modus: neuer UI-Modus, die Logik bleibt unverändert
   const [uiMode, setUiMode] = useState(shared ? shared.uiMode : "einfach"); // "einfach" | "profi"
   const [simpleGoal, setSimpleGoal] = useState(shared ? shared.simpleGoal : "free"); // free | blocks | short
@@ -861,6 +1006,10 @@ function Urlaubsplaner() {
   const [apiHolidays, setApiHolidays] = useState(null);
   const [apiStatus, setApiStatus] = useState("laedt"); // "laedt" | "api" | "lokal"
   useEffect(() => {
+    // Solange ein #p=-Link noch dekomprimiert wird, stehen year/st noch auf
+    // Standardwerten – erst nach Anwendung des geteilten Zustands (oder nach
+    // dessen Scheitern) mit den dann gültigen Werten abfragen.
+    if (view === "loading") return;
     let ignore = false;
     setApiStatus("laedt");
     setApiHolidays(null);
@@ -886,7 +1035,7 @@ function Urlaubsplaner() {
         if (!ignore) { setApiHolidays(null); setApiStatus("lokal"); }
       });
     return () => { ignore = true; };
-  }, [year, st]);
+  }, [year, st, view]);
 
   const days = useMemo(() => buildDays(year, st, xmasRule, apiHolidays), [year, st, xmasRule, apiHolidays]);
 
@@ -900,6 +1049,9 @@ function Urlaubsplaner() {
   const [vacStatus, setVacStatus] = useState("laedt"); // "laedt" | "openholidays" | "ersatz" | "keine" | "fehler"
   const vacCache = useRef({}); // { "jahr-kürzel": { periods, status } } – vermeidet doppelte Aufrufe
   useEffect(() => {
+    // Siehe Kommentar bei der Feiertags-API oben: während "loading" stehen
+    // year/st noch auf Standardwerten.
+    if (view === "loading") return;
     let ignore = false;
     const cacheKey = `${year}-${st}`;
     const cached = vacCache.current[cacheKey];
@@ -918,7 +1070,7 @@ function Urlaubsplaner() {
       setVacStatus(result.status);
     })();
     return () => { ignore = true; };
-  }, [year, st]);
+  }, [year, st, view]);
 
   // Ferien-Tagesmap fürs sichtbare Jahr (beide Modi nutzen dieselben Daten)
   const vacationDays = useMemo(() => vacationDayMap(vacations, year), [vacations, year]);
@@ -995,6 +1147,15 @@ function Urlaubsplaner() {
       ]);
       setAutoVac("9999");
     }
+  };
+
+  // Einstieg von der Landing Page: nur uiMode + view wechseln, keine
+  // vorhandenen Eingaben zurücksetzen (identische Jahres-Korrektur wie beim
+  // bestehenden Einfach-/Profi-Umschalter im Planer-Header).
+  const goToPlanner = (mode) => {
+    setUiMode(mode);
+    if (mode === "einfach" && year > currentYear + 2) setYear(currentYear);
+    setView("planner");
   };
 
   const ovrKey = (day) => `${year}:${day.m}-${day.d}`;
@@ -1144,6 +1305,9 @@ function Urlaubsplaner() {
   // Den (komprimierten) Teilen-Link vorab im Hintergrund erzeugen, sobald sich
   // relevante Eingaben ändern. So liegt er beim Klick synchron bereit.
   useEffect(() => {
+    // Solange ein #p=-Link noch dekomprimiert wird, stehen die Eingaben noch
+    // auf Standardwerten – noch keinen (falschen) Vorab-Link dafür bauen.
+    if (view === "loading") return;
     let cancelled = false;
     (async () => {
       try {
@@ -1155,7 +1319,7 @@ function Urlaubsplaner() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [year, st, vac, ot, xmasRule, uiMode, simpleGoal, simpleStarted,
       schoolHolidayPreference, autoVac, autoOt, spendFirst, autoFrom,
-      showWeekendHolidays, blocks, yearOverrides]);
+      showWeekendHolidays, blocks, yearOverrides, view]);
 
   // Beim Start: geteilte Planung anwenden (bei #p= asynchron dekomprimieren),
   // Hinweis zeigen und das Fragment aus der Adresszeile entfernen (sauberes
@@ -1191,7 +1355,8 @@ function Urlaubsplaner() {
         }
       } catch (e) { res = null; }
       if (cancelled) return;
-      if (res && res.state) applySharedState(res.state);
+      if (res && res.state) { applySharedState(res.state); setView("planner"); }
+      else setView("landing"); // ungültig/fehlgeschlagen -> aus "loading" zur Landing Page
       toastFor(res);
       clearFragment();
     })();
@@ -1609,10 +1774,27 @@ function Urlaubsplaner() {
   return (
     <div className={`min-h-screen ${dark ? "bg-slate-950 text-slate-100" : "bg-slate-100 text-slate-900"}`} style={{ fontFeatureSettings: '"tnum"' }}>
       <style>{`@keyframes upFade { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }`}</style>
+      {view === "loading" ? (
+        <div className="min-h-screen flex items-center justify-center px-4">
+          <p role="status" aria-live="polite" className={`text-sm font-semibold ${dark ? "text-slate-300" : "text-slate-600"}`}>
+            {t("common.loadingSharedPlan")}
+          </p>
+        </div>
+      ) : view === "landing" ? (
+        <LandingPage dark={dark} setDark={setDark} cardCls={cardCls}
+          onStartSimple={() => goToPlanner("einfach")}
+          onStartPro={() => goToPlanner("profi")} />
+      ) : (
+      <>
       {/* Kopf */}
       <header className="bg-slate-900 text-white">
         <div className="max-w-6xl mx-auto px-4 py-6 flex flex-wrap items-end justify-between gap-4">
           <div>
+            <button onClick={() => setView("landing")}
+              className="mb-1 text-xs font-semibold text-slate-400 hover:text-slate-200 focus:outline-none focus:ring-2 focus:ring-emerald-500 rounded"
+              aria-label={t("nav.backToStartAriaLabel")}>
+              {t("nav.backToStart")}
+            </button>
             <p className="text-xs font-semibold uppercase tracking-widest text-emerald-400 mb-1">
               {t("header.tagline", { state: STATES[st] })}
             </p>
@@ -2243,6 +2425,8 @@ function Urlaubsplaner() {
             </div>
           </div>
         </div>
+      )}
+      </>
       )}
 
       {/* Kurze Statusmeldung (Screenreader-freundlich) */}

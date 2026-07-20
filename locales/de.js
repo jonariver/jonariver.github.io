@@ -73,6 +73,7 @@
     common: {
       moreInfo: "Mehr erfahren",
       documentTitle: "Urlaubsplaner",
+      loadingSharedPlan: "Geteilte Planung wird geladen …",
     },
 
     /* ---- Kopfbereich ---- */
@@ -86,6 +87,67 @@
     nav: {
       simpleMode: "Einfach",
       proMode: "Profi",
+      backToStart: "← Zur Startseite",
+      backToStartAriaLabel: "Zurück zur Startseite",
+    },
+
+    /* ---- Landing Page (Startansicht vor dem Planer) ---- */
+    landing: {
+      hero: {
+        heading: "Mehr freie Zeit aus deinen Urlaubstagen machen",
+        description: "Nutze Feiertage, Brückentage und Schulferien passend zu deinem Bundesland. Lass dir automatisch eine Planung erstellen und passe sie anschließend direkt im Kalender an.",
+        example: "4 Urlaubstage können bis zu 10 freie Tage ergeben.",
+      },
+      modes: {
+        heading: "Wähle deinen Einstieg",
+        simple: {
+          badge: "Empfohlen",
+          title: "Einfach planen",
+          text: "Beantworte wenige kurze Fragen und erhalte automatisch passende Urlaubsvorschläge.",
+          benefits: [
+            "Geführte Planung",
+            "Schnelles Ergebnis",
+            "Schulferien bevorzugen oder meiden",
+            "Anschließend im Kalender anpassbar",
+          ],
+          button: "Einfach starten",
+        },
+        pro: {
+          title: "Individuell planen",
+          text: "Lege verfügbare Kontingente, Zeiträume und Regeln selbst fest.",
+          benefits: [
+            "Urlaubstage manuell setzen oder entfernen",
+            "Überstundentage in die Planung einbeziehen",
+            "Wunschblöcke und Sperrzeiten festlegen",
+            "Reihenfolge für Urlaub und Überstunden bestimmen",
+          ],
+          button: "Profi-Modus öffnen",
+        },
+      },
+      features: {
+        heading: "Automatisch planen, flexibel anpassen",
+        items: [
+          { icon: "🎯", title: "Passende Vorschläge", text: "Feiertage und Brückentage werden möglichst effizient genutzt." },
+          { icon: "🖊️", title: "Kalender selbst bearbeiten", text: "Setze Urlaubstage direkt im Kalender oder entferne vorgeschlagene Tage wieder." },
+          { icon: "🔀", title: "Urlaub und Überstunden kombinieren", text: "Nutze im Profi-Modus Urlaubstage und verfügbare Überstundentage gemeinsam." },
+        ],
+      },
+      steps: {
+        heading: "So funktioniert es",
+        items: [
+          { title: "Angaben machen", text: "Jahr, Bundesland und Urlaubstage festlegen." },
+          { title: "Wünsche auswählen", text: "Ziel und Umgang mit Schulferien bestimmen." },
+          { title: "Planung anpassen", text: "Vorschläge prüfen und direkt im Kalender verändern." },
+        ],
+      },
+      trust: {
+        items: [
+          "Feiertage passend zum Bundesland",
+          "Schulferien werden berücksichtigt",
+          "Keine Anmeldung erforderlich",
+          "Planung als Link teilbar",
+        ],
+      },
     },
 
     share: {
