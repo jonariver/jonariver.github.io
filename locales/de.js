@@ -254,6 +254,16 @@
       schoolHolidaySourceErsatz: "schulferien-api.de (Ersatzquelle)",
       schoolHolidaySourceNone: "keine Daten verfügbar",
       schoolHolidaySourceUnreachable: "derzeit nicht erreichbar",
+      otCalc: {
+        toggleShow: "Überstunden aus Stunden berechnen",
+        toggleHide: "Überstunden-Rechner ausblenden",
+        hoursLabel: "Überstunden (Stunden)",
+        hoursPerDayLabel: "Stunden pro Arbeitstag",
+        result: (p) => `= ${p.value} ${p.valueRaw === 1 ? "Überstundentag" : "Überstundentage"}`,
+        resultInvalid: "Bitte gültige Werte eingeben.",
+        apply: "Überstundentage übernehmen",
+        applyAriaLabel: "Berechnete Überstundentage in das Feld „Überstundenabbau (Tage)“ übernehmen",
+      },
     },
 
     /* ---- Profi-Modus: Panel „Arbeitsregelung“ ---- */

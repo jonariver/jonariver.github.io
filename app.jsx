@@ -455,6 +455,14 @@ function plan(days, cfg) {
 /* ------------------------------------------------------------------ */
 
 const fmtNum = (x) => (x % 1 === 0 ? String(x) : x.toFixed(1).replace(".", ","));
+// Wie fmtNum, aber mit bis zu ZWEI Nachkommastellen (für den Überstunden-Rechner:
+// Stunden/Tagesstunden ergibt selten ein glattes Halb-/Ganztages-Vielfaches).
+// Rundet nur auf 2 Nachkommastellen, nicht zusätzlich auf halbe/ganze Tage.
+const fmtNum2 = (x) => {
+  let s = x.toFixed(2);
+  if (s.includes(".")) s = s.replace(/0+$/, "").replace(/\.$/, "");
+  return s.replace(".", ",");
+};
 const fmtDate = (day) => `${DOWS[day.dow]} ${String(day.d).padStart(2, "0")}.${String(day.m + 1).padStart(2, "0")}.`;
 // Reines Datumsformat "DD.MM." aus einem UTC-Timestamp (Tag-genau), fuer die
 // Monatszusammenfassung (Feiertage/Schulferien) unter den Monatskarten.
@@ -994,6 +1002,40 @@ function Urlaubsplaner() {
       try { localStorage.setItem("urlaubsplaner-panels", JSON.stringify(next)); } catch (e) {}
       return next;
     });
+  };
+
+  // Überstunden-Rechner (nur Profi-Modus): rechnet Stunden in Überstundentage
+  // um (Stunden ÷ Stunden pro Arbeitstag). Rein lokale UI-Hilfe – beeinflusst
+  // "ot" (Überstundenabbau in Tagen) erst, wenn "übernehmen" geklickt wird.
+  // Eingegebene Überstunden sind transient; nur "Stunden pro Arbeitstag" wird
+  // dauerhaft gespeichert (Standard: 8), damit sie beim nächsten Besuch
+  // vorausgefüllt ist.
+  const [showOtCalc, setShowOtCalc] = useState(false);
+  const [otCalcHours, setOtCalcHours] = useState("");
+  const [otCalcHoursPerDay, setOtCalcHoursPerDay] = useState(() => {
+    try {
+      const saved = localStorage.getItem("urlaubsplaner-ot-hours-per-day");
+      const n = parseFloat(String(saved).replace(",", "."));
+      if (Number.isFinite(n) && n > 0) return saved;
+    } catch (e) { /* z. B. Vorschau-Umgebungen ohne Local Storage */ }
+    return "8";
+  });
+  const updateOtCalcHoursPerDay = (v) => {
+    setOtCalcHoursPerDay(v);
+    try { localStorage.setItem("urlaubsplaner-ot-hours-per-day", v); } catch (e) {}
+  };
+  // Bewusst kein Fallback wie bei num(): negative Eingaben sollen hier als
+  // ungültig erkannt werden statt still auf 0 zu fallen.
+  const parseLooseNumber = (v) => (v === "" || v == null ? NaN : parseFloat(String(v).replace(",", ".")));
+  const otCalcHoursNum = parseLooseNumber(otCalcHours);
+  const otCalcHpdNum = parseLooseNumber(otCalcHoursPerDay);
+  const otCalcValid = Number.isFinite(otCalcHoursNum) && otCalcHoursNum >= 0 &&
+    Number.isFinite(otCalcHpdNum) && otCalcHpdNum > 0;
+  // Nur auf 2 Nachkommastellen gerundet (keine unnötige Rundung auf halbe/ganze Tage).
+  const otCalcResult = otCalcValid ? Math.round((otCalcHoursNum / otCalcHpdNum) * 100) / 100 : null;
+  const applyOtCalc = () => {
+    if (otCalcResult === null) return;
+    setOt(otCalcResult);
   };
 
   // Dokumenttitel aus der aktiven Locale setzen (aktuell nur Deutsch; der
@@ -2078,6 +2120,38 @@ function Urlaubsplaner() {
                     <label className={labelCls}>{t("settings.overtimeDaysLabel")}</label>
                     <input className={inputCls} type="number" min="0" step="0.5" value={ot}
                       onFocus={selectAllOnFocus} onChange={(e) => setOt(e.target.value)} />
+                    <button type="button" onClick={() => setShowOtCalc((v) => !v)}
+                      aria-expanded={showOtCalc} aria-controls="ot-calc-panel"
+                      className="mt-1 text-[11px] font-semibold text-emerald-600 hover:underline focus:outline-none focus:ring-2 focus:ring-emerald-500 rounded">
+                      {showOtCalc ? t("settings.otCalc.toggleHide") : t("settings.otCalc.toggleShow")}
+                    </button>
+                    {showOtCalc && (
+                      <div id="ot-calc-panel"
+                        className={`mt-2 space-y-2 rounded-md border p-2 ${dark ? "border-slate-700 bg-slate-800/60" : "border-slate-200 bg-slate-50"}`}>
+                        <div>
+                          <label htmlFor="ot-calc-hours" className={labelCls}>{t("settings.otCalc.hoursLabel")}</label>
+                          <input id="ot-calc-hours" className={inputCls} type="number" min="0" step="0.5"
+                            value={otCalcHours} onFocus={selectAllOnFocus}
+                            onChange={(e) => setOtCalcHours(e.target.value)} />
+                        </div>
+                        <div>
+                          <label htmlFor="ot-calc-hpd" className={labelCls}>{t("settings.otCalc.hoursPerDayLabel")}</label>
+                          <input id="ot-calc-hpd" className={inputCls} type="number" min="0" step="0.5"
+                            value={otCalcHoursPerDay} onFocus={selectAllOnFocus}
+                            onChange={(e) => updateOtCalcHoursPerDay(e.target.value)} />
+                        </div>
+                        <p aria-live="polite" className={`text-xs font-semibold ${dark ? "text-slate-200" : "text-slate-700"}`}>
+                          {otCalcResult !== null
+                            ? t("settings.otCalc.result", { value: fmtNum2(otCalcResult), valueRaw: otCalcResult })
+                            : t("settings.otCalc.resultInvalid")}
+                        </p>
+                        <button type="button" onClick={applyOtCalc} disabled={otCalcResult === null}
+                          aria-label={t("settings.otCalc.applyAriaLabel")}
+                          className="w-full rounded-md bg-emerald-600 px-3 py-1.5 text-xs font-bold text-white hover:bg-emerald-700 focus:outline-none focus:ring-2 focus:ring-emerald-500 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-emerald-600">
+                          {t("settings.otCalc.apply")}
+                        </button>
+                      </div>
+                    )}
                   </div>
                 </div>
                 <p className="text-[11px] text-slate-400">
