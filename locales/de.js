@@ -94,7 +94,7 @@
     /* ---- Landing Page (Startansicht vor dem Planer) ---- */
     landing: {
       hero: {
-        heading: "Mehr freie Zeit aus deinen Urlaubstagen machen",
+        heading: "Mach mehr aus deinen Urlaubstagen",
         description: "Nutze Feiertage, Brückentage und Schulferien passend zu deinem Bundesland. Lass dir automatisch eine Planung erstellen und passe sie anschließend direkt im Kalender an.",
         example: "4 Urlaubstage können bis zu 10 freie Tage ergeben.",
       },

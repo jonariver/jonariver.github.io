@@ -785,7 +785,7 @@ function LandingPage({ dark, setDark, cardCls, onStartSimple, onStartPro }) {
       <main className="max-w-6xl mx-auto px-4 py-10 space-y-14">
         {/* Hero */}
         <section className="text-center max-w-2xl mx-auto space-y-4" style={{ animation: "upFade .35s ease" }}>
-          <h2 className="text-3xl sm:text-4xl font-bold tracking-tight">{t("landing.hero.heading")}</h2>
+          <h2 className="text-3xl sm:text-4xl font-bold tracking-tight [text-wrap:balance]">{t("landing.hero.heading")}</h2>
           <p className={`text-sm sm:text-base leading-relaxed ${softTextCls}`}>{t("landing.hero.description")}</p>
           <p className={`inline-block rounded-full px-4 py-2 text-sm font-semibold ${dark ? "bg-emerald-900/40 text-emerald-300" : "bg-emerald-50 text-emerald-700"}`}>
             {t("landing.hero.example")}
@@ -857,20 +857,35 @@ function LandingPage({ dark, setDark, cardCls, onStartSimple, onStartPro }) {
           </div>
         </section>
 
-        {/* Ablauf */}
+        {/* Ablauf: kompakte, verbundene Schrittfolge statt große Karten -
+            unterscheidet sich dadurch bewusst vom Funktionsbereich oben. */}
         <section className="space-y-4">
           <h2 className="text-center text-xl font-bold">{t("landing.steps.heading")}</h2>
-          <ol className="grid gap-4 sm:grid-cols-3">
-            {t("landing.steps.items").map((s, i) => (
-              <li key={s.title} className={`${cardCls} p-5 space-y-2`}>
-                <span className={`inline-flex h-6 w-6 items-center justify-center rounded-full text-xs font-bold ${badgeCls}`}>
-                  {i + 1}
-                </span>
-                <h3 className="text-sm font-bold">{s.title}</h3>
-                <p className={`text-xs leading-relaxed ${mutedTextCls}`}>{s.text}</p>
-              </li>
+          <div role="list" className="flex flex-col sm:flex-row sm:items-start">
+            {t("landing.steps.items").map((s, i, arr) => (
+              <React.Fragment key={s.title}>
+                <div role="listitem" className="flex flex-col gap-1.5 sm:flex-1 sm:items-center sm:gap-2 sm:text-center sm:px-2">
+                  <div className="flex items-center gap-2.5 sm:flex-col sm:gap-2">
+                    <span className={`inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-xs font-bold ${badgeCls}`}>
+                      {i + 1}
+                    </span>
+                    <h3 className="text-sm font-bold">{s.title}</h3>
+                  </div>
+                  <p className={`text-xs leading-relaxed pl-[34px] sm:pl-0 ${mutedTextCls}`}>{s.text}</p>
+                </div>
+                {i < arr.length - 1 && (
+                  <>
+                    {/* Desktop: dezente horizontale Verbindungslinie zwischen den Schritten */}
+                    <div aria-hidden="true"
+                      className={`hidden sm:block sm:flex-1 sm:mt-3 sm:h-px ${dark ? "bg-slate-700" : "bg-slate-300"}`} />
+                    {/* Mobil: kurze vertikale Verbindung statt horizontaler Linie (kein Overflow) */}
+                    <div aria-hidden="true"
+                      className={`sm:hidden ml-[14px] h-3 w-px ${dark ? "bg-slate-700" : "bg-slate-300"}`} />
+                  </>
+                )}
+              </React.Fragment>
             ))}
-          </ol>
+          </div>
         </section>
 
         {/* Vertrauenshinweise */}
