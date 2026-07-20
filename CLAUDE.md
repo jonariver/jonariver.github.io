@@ -128,6 +128,75 @@ Header sichtbar, mit `aria-label`, Fokusring und Teilen-Icon.
 - Ein geteiltes Jahr außerhalb der Dropdown-Spanne (aktuelles Jahr … +4) wird
   korrekt geladen und gerechnet; nur das Jahr-Auswahlfeld zeigt es evtl. nicht an.
 
+## Schulferien-Datenquellen
+
+### Zweck und Charakter
+Schulferien sind ausschließlich ein **Planungshinweis** (Kalenderanzeige,
+Monatszusammenfassung, optionale Gewichtung bei der automatischen
+Brückentage-Verteilung über `schoolHolidayPreference`). Sie fließen an keiner
+Stelle in `plan()`s Kernberechnung der Urlaubs-/Überstundentage ein und werden
+**nicht** im Share-Link gespeichert (siehe Abschnitt „Share-Link-Funktion“ –
+bewusst nicht persistiert, da ableitbar und rein UI-lokal).
+
+### Primär- und Ersatzquelle
+- **Primärquelle**: OpenHolidays API
+  (`https://openholidaysapi.org/SchoolHolidays?countryIsoCode=DE&subdivisionCode=DE-{Code}&languageIsoCode=DE&validFrom={Jahr}-01-01&validTo={Jahr}-12-31`).
+  Liefert ein JSON-**Array direkt** (kein Wrapper-Objekt); Felder u. a.
+  `startDate`/`endDate` (reine `YYYY-MM-DD`-Werte, **`endDate` inklusiv** –
+  belegt durch Einträge mit `startDate === endDate`, z. B. „Buß- und Bettag“)
+  sowie `name` als `[{ language, text }]`. Deckt laut Live-Test auch Jahre wie
+  2029/2030 ab. Interne Bundeslandcodes (`BY`, `NW`, …) bleiben unverändert;
+  nur für diese eine Anfrage wird daraus `DE-BY` etc.
+- **Ersatzquelle** (automatisch, falls Primärquelle nicht erreichbar, HTTP-
+  Fehler, kein gültiges Array, nur ungültige Einträge oder keine Ferien
+  liefert): `https://schulferien-api.de/api/v1/{Jahr}/{Bundeslandcode}/`
+  (unverändert wie zuvor). Felder `start`/`end` (ISO-Zeitstempel mit `Z`,
+  **`end` ebenfalls inklusiv** – letzter Ferientag um 23:59Z) sowie
+  `name`/`name_cp`. Deckt laut Anbieter nur 2022–2028 ab; für spätere Jahre
+  liefert sie planmäßig keine Daten, wodurch OpenHolidays dort automatisch
+  greift.
+- Beide Antworten werden **unmittelbar nach dem Abruf** auf ein gemeinsames
+  internes Format normalisiert: `{ start, end, name, source }`
+  (`normalizeOpenHolidaysPeriod` / `normalizeSchulferienApiPeriod` in
+  `app.jsx`, vor der Komponente). Die bestehende `vacationDayMap()` verarbeitet
+  ausschließlich diese normalisierten Objekte und musste inhaltlich nicht
+  geändert werden.
+
+### Status, Cache und Race Conditions
+`vacStatus` unterscheidet fünf Zustände: `"laedt"` (wird geladen),
+`"openholidays"` (Primärquelle erfolgreich), `"ersatz"` (Ersatzquelle
+erfolgreich), `"keine"` (beide Quellen erreichbar, aber ohne verwertbare
+Daten für Jahr+Bundesland) und `"fehler"` (beide Quellen technisch nicht
+erreichbar). Ein leeres, aber technisch erfolgreiches Ergebnis zählt
+ausdrücklich **nicht** als „Daten vorhanden“ (`hasVacationData` prüft sowohl
+den Status als auch `vacations.length > 0`).
+
+Der Cache (`vacCache`, Schlüssel `"Jahr-Bundesland"`) speichert je Kombination
+sowohl die normalisierten Zeiträume als auch den tatsächlich verwendeten
+Status; beim Zurückwechseln zu einer bereits geladenen Kombination erfolgt
+kein erneuter Netzwerkaufruf. Ein `ignore`-Flag im Cleanup des `useEffect`
+verhindert, dass eine verspätete Antwort nach einem zwischenzeitlichen
+Jahres-/Bundeslandwechsel den neueren Zustand überschreibt (gleiches Muster
+wie bei der Feiertagsabfrage).
+
+### Verhalten ohne verwertbare Daten
+Ohne Daten – auch **während des Ladens** – darf die gewählte
+Schulferienpräferenz keinen Einfluss auf die Berechnung haben. Die Auswahl
+selbst (`schoolHolidayPreference`) bleibt dabei erhalten; für `plan()` wird
+stattdessen die abgeleitete `effectiveSchoolHolidayPreference` verwendet, die
+bei fehlenden Daten fest auf `"neutral"` steht. Die drei Auswahloptionen
+werden in diesem Fall in **beiden Modi** sichtbar deaktiviert
+(`schoolPrefOptionsDisabled`), und ein dynamischer Hinweistext mit Bundesland
+und Jahr (`schoolHolidays.notice.noData` bzw. `.unreachable`) erscheint direkt
+unter der Auswahl.
+
+### Anzeige der Quelle (Profi-Modus)
+Im Panel „Allgemein“ steht direkt unter der Feiertagsquelle eine zweite Zeile
+mit der tatsächlich verwendeten Schulferienquelle (`vacStatus`-abhängig: grün
+= OpenHolidays, orange = Ersatzquelle, rot = keine Daten/nicht erreichbar,
+neutral = wird geladen). Der Einfachmodus zeigt keine dauerhafte Quellenzeile,
+sondern nur den Hinweis bei fehlenden Daten.
+
 ## Internationalisierung und UI-Texte
 
 ### Grundprinzip
@@ -180,8 +249,9 @@ umzubauen.
   und `vacRaw` für den Vergleich). Ein Vergleich darf nie gegen den bereits
   formatierten String erfolgen.
 - Von externen APIs gelieferte Inhalte (z. B. Feiertagsnamen von
-  `feiertage-api.de`, Ferienbezeichnungen von `schulferien-api.de`) dürfen
-  **unverändert** angezeigt werden und müssen nicht künstlich übersetzt werden.
+  `feiertage-api.de`, Ferienbezeichnungen von OpenHolidays API oder der
+  Ersatzquelle `schulferien-api.de`) dürfen **unverändert** angezeigt werden
+  und müssen nicht künstlich übersetzt werden.
 - Von der Anwendung selbst definierte **Fallback-Texte** (z. B. „Schulferien",
   wenn die API keinen Namen liefert) sowie **intern berechnete Feiertagsnamen**
   (z. B. „Christi Himmelfahrt") gehören dagegen zwingend in `locales/de.js`.

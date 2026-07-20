@@ -127,6 +127,16 @@
         neutral: "Keine Präferenz",
       },
       hint: "Bestimmt, ob automatisch erzeugte Urlaubsvorschläge bevorzugt innerhalb oder außerhalb der Schulferien liegen.",
+      notice: {
+        // "Keine Daten": beide Quellen waren erreichbar, lieferten aber keine
+        // verwertbaren Ferien für Jahr+Bundesland.
+        noData: (p) =>
+          `Für ${p.state} sind für ${p.year} derzeit keine Schulferiendaten verfügbar. Deine Ferienpräferenz wird bei dieser Planung nicht berücksichtigt.`,
+        // "Nicht erreichbar": beide Quellen sind technisch fehlgeschlagen.
+        unreachable:
+          "Die Schulferiendaten konnten derzeit nicht geladen werden. Deine Ferienpräferenz wird bei dieser Planung nicht berücksichtigt.",
+      },
+      optionsDisabledTitle: "Ohne verfügbare Schulferiendaten wirkungslos, bis Daten vorliegen.",
     },
 
     /* ---- Einfach-Modus ---- */
@@ -177,6 +187,11 @@
       holidaySourceApi: "feiertage-api.de (online)",
       holidaySourceLoading: "wird geladen …",
       holidaySourceLocal: "integrierte Berechnung (API nicht erreichbar)",
+      schoolHolidaySourceLabel: "Schulferienquelle:",
+      schoolHolidaySourceOpenHolidays: "OpenHolidays API (online)",
+      schoolHolidaySourceErsatz: "schulferien-api.de (Ersatzquelle)",
+      schoolHolidaySourceNone: "keine Daten verfügbar",
+      schoolHolidaySourceUnreachable: "derzeit nicht erreichbar",
     },
 
     /* ---- Profi-Modus: Panel „Arbeitsregelung“ ---- */
@@ -304,7 +319,6 @@
         rangeFrom: (p) => `ab ${p.date}`,
         rangeBetween: (p) => `${p.from}–${p.to}`,
       },
-      loadErrorHint: "Schulferien konnten derzeit nicht geladen werden.",
       vacationTooltip: (p) => `${p.name} in ${p.state} · ${p.start} bis ${p.end}`,
     },
 

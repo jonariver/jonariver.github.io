@@ -94,6 +94,9 @@ function buildDays(year, st, xmasRule, extHolidays) {
 // Wandelt die von der API gelieferten Ferien-Zeiträume in eine Map
 // "m-d" -> { name, start, end } um, begrenzt auf das sichtbare Kalenderjahr.
 // Reine Datenaufbereitung – getrennt von API-Aufruf und Darstellung.
+// Erwartet bereits NORMALISIERTE Zeiträume { start, end, name, source } (siehe
+// normalizeOpenHolidaysPeriod / normalizeSchulferienApiPeriod unten); die Felder
+// start/end sind gültige, parsebare ISO-Datumswerte, "end" ist inklusive.
 function vacationDayMap(periods, year) {
   const map = {};
   if (!Array.isArray(periods)) return map;
@@ -112,6 +115,105 @@ function vacationDayMap(periods, year) {
     }
   }
   return map;
+}
+
+/* ------------------------------------------------------------------ */
+/* Schulferien: Primärquelle OpenHolidays API, Ersatzquelle            */
+/* schulferien-api.de – beide werden unmittelbar nach dem Abruf auf    */
+/* ein gemeinsames internes Format normalisiert: { start, end, name,   */
+/* source }. "start"/"end" sind gültige ISO-Datumswerte, "end" ist bei */
+/* BEIDEN Quellen inklusive (letzter Ferientag), sodass die bestehende */
+/* vacationDayMap() unverändert bleiben kann. Reine Helfer, keine      */
+/* Komponentenlogik – analog zu holidayMap()/buildDays() oben.         */
+/* ------------------------------------------------------------------ */
+
+// OpenHolidays SchoolHolidays liefert ein JSON-Array direkt (kein Wrapper-
+// Objekt), Felder u. a. startDate/endDate ("YYYY-MM-DD", ohne Uhrzeit -> von
+// JS als UTC-Mitternacht interpretiert, keine Zeitzonenverschiebung) sowie
+// name als Array [{ language, text }]. endDate ist INKLUSIVE: Einträge mit
+// nur einem Ferientag haben startDate === endDate (z. B. „Buß- und Bettag“),
+// was bei einem exklusiven Enddatum nicht möglich wäre.
+function normalizeOpenHolidaysPeriod(e) {
+  if (!e || typeof e !== "object") return null;
+  const start = typeof e.startDate === "string" ? e.startDate : null;
+  const end = typeof e.endDate === "string" ? e.endDate : null;
+  if (!start || !end) return null;
+  const sd = new Date(start), ed = new Date(end);
+  if (isNaN(sd) || isNaN(ed) || ed < sd) return null; // ungültigen Zeitraum verwerfen
+  let name = null;
+  if (Array.isArray(e.name)) {
+    const de = e.name.find((n) => n && n.language === "DE" && typeof n.text === "string");
+    const first = e.name.find((n) => n && typeof n.text === "string");
+    name = (de || first || {}).text || null;
+  }
+  return { start, end, name, source: "openholidays" };
+}
+
+// schulferien-api.de (v1) liefert ein JSON-Array mit Feldern start/end
+// (ISO-Zeitstempel inkl. "Z", z. B. "2029-07-30T00:00Z" / "...T23:59Z" –
+// das Enddatum bezeichnet seit der v1-Datenkorrektur den tatsächlichen
+// letzten Ferientag, also ebenfalls INKLUSIVE) sowie name/name_cp.
+function normalizeSchulferienApiPeriod(e) {
+  if (!e || typeof e !== "object") return null;
+  const start = typeof e.start === "string" ? e.start : null;
+  const end = typeof e.end === "string" ? e.end : null;
+  if (!start || !end) return null;
+  const sd = new Date(start), ed = new Date(end);
+  if (isNaN(sd) || isNaN(ed) || ed < sd) return null;
+  const name = (typeof e.name_cp === "string" && e.name_cp) || (typeof e.name === "string" && e.name) || null;
+  return { start, end, name, source: "schulferien-api" };
+}
+
+function fetchOpenHolidaysResponse(year, st) {
+  // Interne Bundeslandcodes (z. B. "BY") bleiben unverändert; nur für diese
+  // eine Anfrage wird daraus der OpenHolidays-Subdivision-Code "DE-BY".
+  const url = `https://openholidaysapi.org/SchoolHolidays?countryIsoCode=DE&subdivisionCode=DE-${st}&languageIsoCode=DE&validFrom=${year}-01-01&validTo=${year}-12-31`;
+  return fetch(url);
+}
+function fetchSchulferienApiResponse(year, st) {
+  return fetch(`https://schulferien-api.de/api/v1/${year}/${st}/`);
+}
+
+// Fragt eine einzelne Quelle ab und unterscheidet dabei klar zwischen
+// "technisch nicht erreichbar" (Netzwerkfehler oder HTTP-Fehlerstatus) und
+// "erreichbar, aber ohne verwertbare Daten" (Antwort kam an, war jedoch kein
+// gültiges Array, enthielt nur ungültige Einträge oder schlicht keine Ferien
+// für Jahr+Bundesland). Wirft nie – Fehler werden immer als Ergebnis codiert,
+// damit ein Ausfall nie zum Absturz führt.
+async function trySchoolHolidaySource(requestFn, normalizeFn) {
+  let response;
+  try {
+    response = await requestFn();
+  } catch (e) {
+    return { reachable: false, periods: [] }; // Netzwerkfehler o. Ä.
+  }
+  if (!response || !response.ok) return { reachable: false, periods: [] }; // HTTP-Fehler
+  let json;
+  try {
+    json = await response.json();
+  } catch (e) {
+    return { reachable: true, periods: [] }; // Antwort kam an, kein gültiges JSON
+  }
+  if (!Array.isArray(json)) return { reachable: true, periods: [] }; // kein gültiges Array
+  const periods = json.map(normalizeFn).filter(Boolean); // ungültige Einträge verwerfen
+  return { reachable: true, periods };
+}
+
+// Orchestriert Primär- und Ersatzquelle gemäß der geforderten Strategie:
+// 1) OpenHolidays versuchen; liefert es Daten, werden diese verwendet.
+// 2) Sonst (nicht erreichbar, HTTP-Fehler, kein Array, nur ungültige
+//    Einträge oder schlicht keine Ferien) schulferien-api.de versuchen.
+// 3) Liefert auch die Ersatzquelle nichts: "keine" (mind. eine Quelle war
+//    erreichbar) oder "fehler" (beide technisch nicht erreichbar).
+async function loadSchoolHolidays(year, st) {
+  const primary = await trySchoolHolidaySource(() => fetchOpenHolidaysResponse(year, st), normalizeOpenHolidaysPeriod);
+  if (primary.periods.length > 0) return { status: "openholidays", periods: primary.periods };
+
+  const fallback = await trySchoolHolidaySource(() => fetchSchulferienApiResponse(year, st), normalizeSchulferienApiPeriod);
+  if (fallback.periods.length > 0) return { status: "ersatz", periods: fallback.periods };
+
+  if (primary.reachable || fallback.reachable) return { status: "keine", periods: [] };
+  return { status: "fehler", periods: [] };
 }
 
 // Minimalbudget: Summe der Kosten aller isolierten Lücken mit Kosten <= 1 Tag.
@@ -788,38 +890,53 @@ function Urlaubsplaner() {
 
   const days = useMemo(() => buildDays(year, st, xmasRule, apiHolidays), [year, st, xmasRule, apiHolidays]);
 
-  // Schulferien von schulferien-api.de laden (V1: /api/v1/{jahr}/{kürzel}/).
-  // Nur Planungshinweis – fließt NICHT in die Berechnung ein.
-  // Ergebnisse werden pro Kombination aus Jahr und Bundesland zwischengespeichert.
-  const [vacations, setVacations] = useState([]); // roh geladene Zeiträume
-  const [vacStatus, setVacStatus] = useState("laedt"); // "laedt" | "ok" | "fehler"
-  const vacCache = useRef({}); // { "jahr-kürzel": periods[] } – vermeidet doppelte Aufrufe
+  // Schulferien: Primärquelle OpenHolidays API, automatische Ersatzquelle
+  // schulferien-api.de (siehe loadSchoolHolidays() oben). Nur Planungshinweis
+  // bzw. Präferenz-Gewichtung – fließt NICHT direkt in plan() ein, sondern nur
+  // über die weiter unten abgeleitete effektive Präferenz. Ergebnisse (inkl.
+  // tatsächlich verwendeter Quelle/Status) werden pro Kombination aus Jahr und
+  // Bundesland zwischengespeichert.
+  const [vacations, setVacations] = useState([]); // normalisierte Zeiträume { start, end, name, source }
+  const [vacStatus, setVacStatus] = useState("laedt"); // "laedt" | "openholidays" | "ersatz" | "keine" | "fehler"
+  const vacCache = useRef({}); // { "jahr-kürzel": { periods, status } } – vermeidet doppelte Aufrufe
   useEffect(() => {
     let ignore = false;
     const cacheKey = `${year}-${st}`;
-    if (vacCache.current[cacheKey]) {
-      setVacations(vacCache.current[cacheKey]);
-      setVacStatus("ok");
+    const cached = vacCache.current[cacheKey];
+    if (cached) {
+      setVacations(cached.periods);
+      setVacStatus(cached.status);
       return;
     }
     setVacStatus("laedt");
     setVacations([]);
-    fetch(`https://schulferien-api.de/api/v1/${year}/${st}/`)
-      .then((r) => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
-      .then((json) => {
-        if (ignore) return;
-        // Nur echte Schulferien behalten; ungültige Einträge herausfiltern
-        const periods = Array.isArray(json) ? json.filter((p) => p && p.start && p.end) : [];
-        vacCache.current[cacheKey] = periods;
-        setVacations(periods);
-        setVacStatus("ok");
-      })
-      .catch(() => { if (!ignore) { setVacations([]); setVacStatus("fehler"); } });
+    (async () => {
+      const result = await loadSchoolHolidays(year, st);
+      if (ignore) return; // Jahr/Bundesland wurde zwischenzeitlich gewechselt
+      vacCache.current[cacheKey] = result;
+      setVacations(result.periods);
+      setVacStatus(result.status);
+    })();
     return () => { ignore = true; };
   }, [year, st]);
 
   // Ferien-Tagesmap fürs sichtbare Jahr (beide Modi nutzen dieselben Daten)
   const vacationDays = useMemo(() => vacationDayMap(vacations, year), [vacations, year]);
+  // Echte Daten liegen nur vor, wenn eine Quelle erfolgreich UND mit Inhalt
+  // geladen wurde – ein leeres, aber technisch erfolgreiches Ergebnis zählt
+  // ausdrücklich NICHT als "Daten vorhanden" (siehe vacStatus "keine").
+  const hasVacationData = (vacStatus === "openholidays" || vacStatus === "ersatz") && vacations.length > 0;
+  // Ohne Daten – auch WÄHREND des Ladens – darf die gewählte Präferenz keinen
+  // Einfluss auf die Berechnung haben; die Auswahl selbst (schoolHolidayPreference)
+  // bleibt dabei unverändert erhalten, nur die für plan() verwendete effektive
+  // Präferenz wird auf "neutral" erzwungen.
+  const effectiveSchoolHolidayPreference = hasVacationData ? schoolHolidayPreference : "neutral";
+  const schoolPrefOptionsDisabled = vacStatus === "laedt" || vacStatus === "keine" || vacStatus === "fehler";
+  const schoolHolidayNotice =
+    vacStatus === "keine" ? t("schoolHolidays.notice.noData", { state: STATES[st], year })
+    : vacStatus === "fehler" ? t("schoolHolidays.notice.unreachable")
+    : null;
+
 
   const yearOverrides = useMemo(() => {
     const o = {};
@@ -840,8 +957,8 @@ function Urlaubsplaner() {
       autoOt: Math.min(effAutoOt, num(ot)),
       spendFirst,
       autoFromMonth: autoFrom,
-      schoolHolidayPreference,
-      vacationDays: schoolHolidayPreference === "neutral" ? null : vacationDays,
+      schoolHolidayPreference: effectiveSchoolHolidayPreference,
+      vacationDays: hasVacationData && effectiveSchoolHolidayPreference !== "neutral" ? vacationDays : null,
       overrides: yearOverrides,
       blocks: blocks
         .filter((b) => num(b.len) >= 1)
@@ -852,7 +969,7 @@ function Urlaubsplaner() {
         })),
     };
     return plan(days, cfg);
-  }, [days, vac, ot, blocks, effAutoVac, effAutoOt, spendFirst, autoFrom, yearOverrides, schoolHolidayPreference, vacationDays]);
+  }, [days, vac, ot, blocks, effAutoVac, effAutoOt, spendFirst, autoFrom, yearOverrides, effectiveSchoolHolidayPreference, hasVacationData, vacationDays]);
 
   // Single Source of Truth: Beide Modi nutzen dieselben States und dasselbe
   // Ergebnis. Der Einfachmodus übersetzt das gewählte Ziel direkt in die
@@ -1164,13 +1281,21 @@ function Urlaubsplaner() {
 
   // Schulferien-Präferenz – EIN Markup für beide Modi (kein doppelter Erklärtext).
   // withHint=true zeigt zusätzlich den kurzen Hilfetext (nur im Profi-Modus nötig).
+  // Ohne verwendbare Daten (bzw. während des Ladens) werden die Optionen sichtbar
+  // deaktiviert; die getroffene Auswahl bleibt dabei unverändert erhalten
+  // (siehe effectiveSchoolHolidayPreference weiter oben).
   const schoolPrefControl = (withHint) => (
     <div>
       <span className={`block ${subLabelCls} mb-1`}>{t("schoolHolidays.question")}</span>
-      <div className="space-y-2">
+      <div className={`space-y-2 ${schoolPrefOptionsDisabled ? "opacity-50" : ""}`}>
         {[["prefer", t("schoolHolidays.preference.prefer")], ["avoid", t("schoolHolidays.preference.avoid")], ["neutral", t("schoolHolidays.preference.neutral")]].map(([k, l]) => (
-          <label key={k} className={`flex items-center gap-2 text-sm cursor-pointer ${dark ? "text-slate-300" : "text-slate-700"}`}>
+          <label key={k}
+            title={schoolPrefOptionsDisabled ? t("schoolHolidays.optionsDisabledTitle") : undefined}
+            className={`flex items-center gap-2 text-sm ${
+              schoolPrefOptionsDisabled ? "cursor-not-allowed" : "cursor-pointer"
+            } ${dark ? "text-slate-300" : "text-slate-700"}`}>
             <input type="radio" name="schoolPref" className="accent-emerald-600"
+              disabled={schoolPrefOptionsDisabled}
               checked={schoolHolidayPreference === k}
               onChange={() => setSchoolHolidayPreference(k)} />
             <span>{l}</span>
@@ -1180,6 +1305,11 @@ function Urlaubsplaner() {
       {withHint && (
         <p className={`mt-1 text-[11px] leading-snug ${dark ? "text-slate-400" : "text-slate-500"}`}>
           {t("schoolHolidays.hint")}
+        </p>
+      )}
+      {schoolHolidayNotice && (
+        <p className={`mt-1 text-[11px] leading-snug font-semibold ${dark ? "text-orange-300/90" : "text-orange-700"}`}>
+          {schoolHolidayNotice}
         </p>
       )}
     </div>
@@ -1251,7 +1381,7 @@ function Urlaubsplaner() {
 
     // --- Schulferien: Zeiträume aus "vacations" auf den Monat zuschneiden ---
     let vacationsText = null;
-    if (vacStatus === "ok" && Array.isArray(vacations)) {
+    if (hasVacationData && Array.isArray(vacations)) {
       const monthStart = Date.UTC(year, m, 1);
       const monthEnd = Date.UTC(year, m + 1, 0); // letzter Tag des Monats
       const entries = [];
@@ -1384,11 +1514,6 @@ function Urlaubsplaner() {
           </section>
   );
 
-  // Dezenter Hinweis, falls die Schulferien nicht geladen werden konnten
-  const vacNotice = vacStatus === "fehler" ? (
-    <p className="text-[11px] text-orange-500/80">{t("calendar.loadErrorHint")}</p>
-  ) : null;
-
   // Strukturierte, dynamisch erzeugte Begründung für einen empfohlenen Zeitraum.
   // EINE Quelle für Einfach- UND Profi-Modus; leitet alles aus der Periode, den
   // Tagen und den aktuellen Einstellungen ab und greift NICHT in plan()/die
@@ -1440,9 +1565,9 @@ function Urlaubsplaner() {
       // invested === 0 ohne Feiertag: nichts Sinnvolles zu sagen -> reason bleibt null
     }
 
-    // --- Schulferienhinweis: nur bei gesicherten Feriendaten (vacStatus "ok") ---
+    // --- Schulferienhinweis: nur bei gesicherten Feriendaten (hasVacationData) ---
     let holidayNote = null, holidayConflict = false;
-    if (vacStatus === "ok" && (schoolHolidayPreference === "avoid" || schoolHolidayPreference === "prefer")) {
+    if (hasVacationData && (schoolHolidayPreference === "avoid" || schoolHolidayPreference === "prefer")) {
       let ferienTage = 0;
       for (let k = p.s; k <= p.e; k++) if (vacationDays[`${days[k].m}-${days[k].d}`]) ferienTage++;
       if (ferienTage > 0) {
@@ -1602,16 +1727,26 @@ function Urlaubsplaner() {
 
                 <div className="space-y-2">
                   <p className={labelCls}>{t("simple.step5Question")}</p>
-                  <div className="space-y-2">
+                  <div className={`space-y-2 ${schoolPrefOptionsDisabled ? "opacity-50" : ""}`}>
                     {[["prefer", t("schoolHolidays.preference.prefer")], ["avoid", t("schoolHolidays.preference.avoid")], ["neutral", t("schoolHolidays.preference.neutral")]].map(([k, l]) => (
-                      <label key={k} className={`flex items-center gap-2 text-sm cursor-pointer ${dark ? "text-slate-300" : "text-slate-700"}`}>
+                      <label key={k}
+                        title={schoolPrefOptionsDisabled ? t("schoolHolidays.optionsDisabledTitle") : undefined}
+                        className={`flex items-center gap-2 text-sm ${
+                          schoolPrefOptionsDisabled ? "cursor-not-allowed" : "cursor-pointer"
+                        } ${dark ? "text-slate-300" : "text-slate-700"}`}>
                         <input type="radio" name="schoolPrefSimple" className="accent-emerald-600"
+                          disabled={schoolPrefOptionsDisabled}
                           checked={schoolHolidayPreference === k}
                           onChange={() => setSchoolHolidayPreference(k)} />
                         <span>{l}</span>
                       </label>
                     ))}
                   </div>
+                  {schoolHolidayNotice && (
+                    <p className={`text-[11px] leading-snug font-semibold ${dark ? "text-orange-300/90" : "text-orange-700"}`}>
+                      {schoolHolidayNotice}
+                    </p>
+                  )}
                 </div>
 
                 <div className="space-y-2">
@@ -1700,7 +1835,6 @@ function Urlaubsplaner() {
                   {showSimpleCal && (
                     <div style={{ animation: "upFade .35s ease" }}>
                       {calendarSection}
-                      {vacNotice}
                       {vacTip && (
                         <p className="mt-1 text-[11px] text-orange-500">{vacTip.text}</p>
                       )}
@@ -1754,6 +1888,14 @@ function Urlaubsplaner() {
                   {apiStatus === "api" && <span className="text-emerald-600 font-semibold">{t("settings.holidaySourceApi")}</span>}
                   {apiStatus === "laedt" && t("settings.holidaySourceLoading")}
                   {apiStatus === "lokal" && t("settings.holidaySourceLocal")}
+                </p>
+                <p className="text-[11px] text-slate-400">
+                  {t("settings.schoolHolidaySourceLabel")}{" "}
+                  {vacStatus === "openholidays" && <span className="text-emerald-600 font-semibold">{t("settings.schoolHolidaySourceOpenHolidays")}</span>}
+                  {vacStatus === "ersatz" && <span className="text-orange-500 font-semibold">{t("settings.schoolHolidaySourceErsatz")}</span>}
+                  {vacStatus === "laedt" && t("settings.holidaySourceLoading")}
+                  {vacStatus === "keine" && <span className="text-rose-600 font-semibold">{t("settings.schoolHolidaySourceNone")}</span>}
+                  {vacStatus === "fehler" && <span className="text-rose-600 font-semibold">{t("settings.schoolHolidaySourceUnreachable")}</span>}
                 </p>
               </CollapsibleCard>
 
@@ -2026,7 +2168,6 @@ function Urlaubsplaner() {
 
           {/* Jahreskalender */}
           {calendarSection}
-          {vacNotice}
           {vacTip && (
             <p className="text-[11px] text-orange-500">{vacTip.text}</p>
           )}
