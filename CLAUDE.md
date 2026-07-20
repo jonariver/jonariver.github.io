@@ -127,3 +127,95 @@ Header sichtbar, mit `aria-label`, Fokusring und Teilen-Icon.
   Shortener/Speicherdienst.
 - Ein geteiltes Jahr außerhalb der Dropdown-Spanne (aktuelles Jahr … +4) wird
   korrekt geladen und gerechnet; nur das Jahr-Auswahlfeld zeigt es evtl. nicht an.
+
+## Internationalisierung und UI-Texte
+
+### Grundprinzip
+Die Anwendung ist aktuell **ausschließlich Deutsch**. Es gibt keinen sichtbaren
+Sprachumschalter, und es darf ohne ausdrückliche Anweisung auch keiner ergänzt
+werden. Die technische Struktur ist aber bereits so vorbereitet, dass eine
+weitere Sprache später ergänzt werden kann, ohne `app.jsx` grundlegend
+umzubauen.
+
+### Speicherort der Übersetzungen
+- `locales/de.js`: einzige aktive Sprachdatei. Definiert das globale Objekt
+  `window.I18N` (keine ES-Module, kein Bundler – reines Script, kompatibel mit
+  Babel-Standalone/GitHub Pages) mit:
+  - der zentralen Funktion `t(key, params)`,
+  - `setLocale(loc)` / `getLocale()`,
+  - `registerLocale(loc, dict)` für spätere zusätzliche Sprachen,
+  - `LOCALES` (Objekt mit den registrierten Sprachwörterbüchern, aktuell nur `de`).
+- `locales/en.js`: **inaktive** Strukturvorlage für eine spätere englische
+  Übersetzung. Wird aktuell **nicht** geladen und **nicht** registriert und hat
+  keinerlei Effekt auf die Anwendung.
+- `index.html` lädt `locales/de.js` als normales, synchron ausgeführtes
+  `<script>` **vor** `app.jsx`. Dadurch ist `window.I18N` beim Start von
+  `app.jsx` garantiert vorhanden – keine Race Condition, kein Flackern.
+- `app.jsx` definiert direkt zu Beginn `const t = window.I18N.t;` und nutzt ab
+  dort ausschließlich `t(...)` für sichtbare Texte.
+
+### Verbindliche Regel für alle künftigen Änderungen
+- Neue oder geänderte **nutzersichtbare** Texte dürfen **nicht** direkt als
+  String-Literal in `app.jsx` oder künftigen Komponenten stehen.
+- Sämtliche UI-Texte müssen als **semantisch benannte** Schlüssel in
+  `locales/de.js` gepflegt und ausschließlich über `t(key, params)` ausgegeben
+  werden. Das gilt insbesondere für:
+  - Buttons, Überschriften, Labels, Auswahloptionen,
+  - Tooltips, `title`-Attribute, `aria-label` und sonstige Accessibility-Texte,
+  - Toasts, Dialoge, Bestätigungs- und Fehlermeldungen,
+  - Platzhalter (`placeholder`), sofern es sich um Text und nicht um reine
+    Zahlenwerte handelt,
+  - Hilfetexte (`InfoHint` u. Ä.) und Fußnoten,
+  - dynamisch zusammengesetzte Begründungen (z. B. `blockReason`,
+    `monthSummary`) sowie Singular-/Pluralformen.
+- Dynamische Sätze werden als **Funktionen** in `locales/de.js` hinterlegt
+  (z. B. `results.reason.namedExtends: (p) => ...`), die strukturierte Werte
+  entgegennehmen. Die Komponenten in `app.jsx` übergeben nur den Schlüssel und
+  die benötigten Werte – sie bauen selbst **keine** deutschen Satzfragmente
+  mehr per String-Konkatenation zusammen.
+- **Wichtig bei Zahlenwerten:** Wird ein Wert sowohl angezeigt (formatiert,
+  z. B. über `fmtNum`, mit Komma statt Punkt) als auch für eine numerische
+  Bedingung (Singular/Plural, `> 0`-Prüfungen) benötigt, müssen **beide**
+  Formen an die Locale-Funktion übergeben werden (z. B. `vac` für die Anzeige
+  und `vacRaw` für den Vergleich). Ein Vergleich darf nie gegen den bereits
+  formatierten String erfolgen.
+- Von externen APIs gelieferte Inhalte (z. B. Feiertagsnamen von
+  `feiertage-api.de`, Ferienbezeichnungen von `schulferien-api.de`) dürfen
+  **unverändert** angezeigt werden und müssen nicht künstlich übersetzt werden.
+- Von der Anwendung selbst definierte **Fallback-Texte** (z. B. „Schulferien",
+  wenn die API keinen Namen liefert) sowie **intern berechnete Feiertagsnamen**
+  (z. B. „Christi Himmelfahrt") gehören dagegen zwingend in `locales/de.js`.
+- Interne, niemals für Nutzer sichtbare Inhalte dürfen weiterhin Deutsch
+  bleiben, z. B. Code-Kommentare, ausschließlich über ein Debug-Flag aktivierte
+  `console.log`-Ausgaben, sowie rein technische Metadaten ohne UI-Bezug (z. B.
+  das `PRODID`-Feld einer erzeugten `.ics`-Datei).
+- Bestehende Übersetzungsschlüssel sollen möglichst weiterverwendet und nicht
+  ohne konkreten Grund umbenannt werden.
+- Änderungen an Übersetzungsschlüsseln oder deren Werten dürfen **niemals**
+  `plan()`, die Bewertungslogik, die Schulferienlogik, das Share-Link-Format
+  oder gespeicherte Einstellungen beeinflussen. Bundesland-**Codes** (z. B.
+  `"BY"`) sind von Übersetzungen ausdrücklich ausgenommen und bleiben
+  sprachunabhängig (siehe `STATE_CODES` in `app.jsx`).
+- Deutsch bleibt bis zur ausdrücklichen Einführung weiterer Sprachen die
+  einzige aktive Sprache. Eine englische Übersetzung oder ein sichtbarer
+  Sprachumschalter dürfen erst nach ausdrücklicher Anweisung ergänzt werden.
+- Bei jeder künftigen Änderung an `app.jsx` ist zu prüfen, ob dabei neue
+  sichtbare String-Literale außerhalb der Locale-Dateien entstanden sind
+  (z. B. per Textsuche nach Umlauten oder typischen deutschen Wörtern in
+  Anführungszeichen).
+
+### Fehlende Schlüssel
+Fehlt ein Schlüssel in der aktiven Sprache, fällt `t()` automatisch auf Deutsch
+zurück; fehlt er auch dort, gibt `t()` sichtbar `⚠ <key>` zurück und schreibt
+eine Warnung in die Browser-Konsole – ein fehlender Schlüssel führt also nie zu
+einem stillen Absturz, sondern ist im Entwicklungsfall sofort erkennbar.
+
+### Spätere Ergänzung von `locales/en.js`
+1. `locales/en.js` vollständig und korrekt ins Englische übersetzen (gleiche
+   Schlüsselstruktur und gleiche Funktionssignaturen wie `locales/de.js`).
+2. In `index.html` zusätzlich **vor** `app.jsx` laden (nach `locales/de.js`).
+3. Am Ende der Datei `window.I18N.registerLocale("en", EN)` aufrufen.
+4. Erst danach `window.I18N.setLocale("en")` aktiv nutzbar machen und einen
+   Sprachumschalter ergänzen – beides ist ausdrücklich **nicht** Teil der
+   aktuellen Vorbereitung und erfordert eine gesonderte, ausdrückliche
+   Anweisung.

@@ -1,19 +1,19 @@
 const { useEffect, useMemo, useRef, useState } = React;
 
+// Zentrale Übersetzungsfunktion (siehe locales/de.js, dort vor app.jsx geladen).
+const t = window.I18N.t;
+
 /* ------------------------------------------------------------------ */
 /* Daten: Bundesländer, Feiertage                                      */
 /* ------------------------------------------------------------------ */
 
-const STATES = {
-  BW: "Baden-Württemberg", BY: "Bayern", BE: "Berlin", BB: "Brandenburg",
-  HB: "Bremen", HH: "Hamburg", HE: "Hessen", MV: "Mecklenburg-Vorpommern",
-  NI: "Niedersachsen", NW: "Nordrhein-Westfalen", RP: "Rheinland-Pfalz",
-  SL: "Saarland", SN: "Sachsen", ST: "Sachsen-Anhalt",
-  SH: "Schleswig-Holstein", TH: "Thüringen",
-};
+// Anzeigenamen kommen aus der Locale; die Codes (Schlüssel) selbst sind
+// sprachunabhängig und werden u. a. für die Share-Link-Validierung benötigt.
+const STATES = t("states");
+const STATE_CODES = Object.keys(STATES);
 
-const MONTHS = ["Januar","Februar","März","April","Mai","Juni","Juli","August","September","Oktober","November","Dezember"];
-const DOWS = ["So","Mo","Di","Mi","Do","Fr","Sa"];
+const MONTHS = t("months");
+const DOWS = t("weekdaysApiOrder");
 
 // Gauß'sche Osterformel (gregorianisch) -> UTC-Timestamp des Ostersonntags
 function easterUTC(y) {
@@ -41,28 +41,28 @@ function holidayMap(year, st) {
     H[`${dt.getUTCMonth()}-${dt.getUTCDate()}`] = name;
   };
 
-  fix(0, 1, "Neujahr");
-  fix(0, 6, "Heilige Drei Könige", ["BW", "BY", "ST"]);
-  fix(2, 8, "Internationaler Frauentag", ["BE", "MV"]);
-  rel(-2, "Karfreitag");
-  rel(0, "Ostersonntag", ["BB"]);
-  rel(1, "Ostermontag");
-  fix(4, 1, "Tag der Arbeit");
-  rel(39, "Christi Himmelfahrt");
-  rel(49, "Pfingstsonntag", ["BB"]);
-  rel(50, "Pfingstmontag");
-  rel(60, "Fronleichnam", ["BW", "BY", "HE", "NW", "RP", "SL"]);
-  fix(7, 15, "Mariä Himmelfahrt", ["SL", "BY"]);
-  fix(8, 20, "Weltkindertag", ["TH"]);
-  fix(9, 3, "Tag der Deutschen Einheit");
-  fix(9, 31, "Reformationstag", ["BB", "HB", "HH", "MV", "NI", "SN", "ST", "SH", "TH"]);
-  fix(10, 1, "Allerheiligen", ["BW", "BY", "NW", "RP", "SL"]);
-  fix(11, 25, "1. Weihnachtstag");
-  fix(11, 26, "2. Weihnachtstag");
+  fix(0, 1, t("holidays.newYear"));
+  fix(0, 6, t("holidays.epiphany"), ["BW", "BY", "ST"]);
+  fix(2, 8, t("holidays.womensDay"), ["BE", "MV"]);
+  rel(-2, t("holidays.goodFriday"));
+  rel(0, t("holidays.easterSunday"), ["BB"]);
+  rel(1, t("holidays.easterMonday"));
+  fix(4, 1, t("holidays.laborDay"));
+  rel(39, t("holidays.ascensionDay"));
+  rel(49, t("holidays.pentecostSunday"), ["BB"]);
+  rel(50, t("holidays.pentecostMonday"));
+  rel(60, t("holidays.corpusChristi"), ["BW", "BY", "HE", "NW", "RP", "SL"]);
+  fix(7, 15, t("holidays.assumptionDay"), ["SL", "BY"]);
+  fix(8, 20, t("holidays.childrensDay"), ["TH"]);
+  fix(9, 3, t("holidays.germanUnityDay"));
+  fix(9, 31, t("holidays.reformationDay"), ["BB", "HB", "HH", "MV", "NI", "SN", "ST", "SH", "TH"]);
+  fix(10, 1, t("holidays.allSaintsDay"), ["BW", "BY", "NW", "RP", "SL"]);
+  fix(11, 25, t("holidays.christmasDay1"));
+  fix(11, 26, t("holidays.christmasDay2"));
   if (st === "SN") {
     // Buß- und Bettag: Mittwoch vor dem 23.11.
     for (let d = 16; d <= 22; d++) {
-      if (new Date(Date.UTC(year, 10, d)).getUTCDay() === 3) { H[`10-${d}`] = "Buß- und Bettag"; break; }
+      if (new Date(Date.UTC(year, 10, d)).getUTCDay() === 3) { H[`10-${d}`] = t("holidays.dayOfRepentance"); break; }
     }
   }
   return H;
@@ -76,12 +76,12 @@ function buildDays(year, st, xmasRule, extHolidays) {
   // Externe Daten (API) haben Vorrang; sonst integrierte Berechnung als Fallback
   const H = extHolidays || holidayMap(year, st);
   const days = [];
-  for (let t = Date.UTC(year, 0, 1); ; t += DAY) {
-    const dt = new Date(t);
+  for (let ts = Date.UTC(year, 0, 1); ; ts += DAY) {
+    const dt = new Date(ts);
     if (dt.getUTCFullYear() !== year) break;
     const m = dt.getUTCMonth(), d = dt.getUTCDate(), dow = dt.getUTCDay();
     const holiday = H[`${m}-${d}`] || null;
-    const special = m === 11 && d === 24 ? "Heiligabend" : m === 11 && d === 31 ? "Silvester" : null;
+    const special = m === 11 && d === 24 ? t("special.christmasEve") : m === 11 && d === 31 ? t("special.newYearsEve") : null;
     const weekend = dow === 0 || dow === 6;
     let cost = 1;
     if (weekend || holiday) cost = 0;
@@ -103,12 +103,12 @@ function vacationDayMap(periods, year) {
     if (isNaN(s) || isNaN(e) || e < s) continue;
     // Auf die im Kalender sichtbaren Tage des gewählten Jahres begrenzen
     // (Ferien über den Jahreswechsel werden so korrekt beschnitten).
-    let t = Math.max(Date.UTC(year, 0, 1), Date.UTC(s.getUTCFullYear(), s.getUTCMonth(), s.getUTCDate()));
+    let ts = Math.max(Date.UTC(year, 0, 1), Date.UTC(s.getUTCFullYear(), s.getUTCMonth(), s.getUTCDate()));
     const end = Math.min(Date.UTC(year, 11, 31), Date.UTC(e.getUTCFullYear(), e.getUTCMonth(), e.getUTCDate()));
-    for (; t <= end; t += DAY) {
-      const dt = new Date(t);
+    for (; ts <= end; ts += DAY) {
+      const dt = new Date(ts);
       const key = `${dt.getUTCMonth()}-${dt.getUTCDate()}`;
-      if (!map[key]) map[key] = { name: p.name_cp || p.name || "Schulferien", start: s, end: e };
+      if (!map[key]) map[key] = { name: p.name_cp || p.name || t("fallback.schoolHolidays"), start: s, end: e };
     }
   }
   return map;
@@ -381,8 +381,8 @@ function dayTitle(day, selType) {
   const parts = [fmtDate(day)];
   if (day.holiday) parts.push(day.holiday);
   if (day.special) parts.push(day.special);
-  if (selType === "vac") parts.push("Urlaub");
-  if (selType === "ot") parts.push("Überstundenabbau");
+  if (selType === "vac") parts.push(t("dayType.vacation"));
+  if (selType === "ot") parts.push(t("dayType.overtime"));
   return parts.join(" · ");
 }
 
@@ -419,7 +419,7 @@ function InfoHint({ text, dark }) {
   const [show, setShow] = useState(false);
   return (
     <span className="inline">
-      <button type="button" onClick={() => setShow(!show)} title="Mehr erfahren"
+      <button type="button" onClick={() => setShow(!show)} title={t("common.moreInfo")}
         className={`ml-1 inline-flex h-4 w-4 items-center justify-center rounded-full border text-[10px] font-bold align-middle ${
           dark ? "border-slate-600 text-slate-400 hover:bg-slate-800" : "border-slate-300 text-slate-500 hover:bg-slate-100"
         }`}>
@@ -976,11 +976,11 @@ function Urlaubsplaner() {
     // navigator.share/clipboard KEIN await steht – sonst verliert u. a. Safari
     // die User-Aktivierung. Fehlt der Vorab-Link, synchron den #plan=-Fallback.
     let url = shareUrlRef.current;
-    if (!url) { try { url = buildShareUrl(); } catch (e) { showToast("Link konnte nicht erstellt werden."); return; } }
-    if (url.length > SHARE_MAX_URL) { showToast("Planung zu umfangreich für einen Link."); return; }
+    if (!url) { try { url = buildShareUrl(); } catch (e) { showToast(t("share.toast.createFailed")); return; } }
+    if (url.length > SHARE_MAX_URL) { showToast(t("share.toast.tooLong")); return; }
     const shareData = {
-      title: `Urlaubsplanung ${year}`,
-      text: `Meine Urlaubsplanung ${year} (${STATES[st]}) – im Urlaubsplaner öffnen:`,
+      title: t("share.nativeTitle", { year }),
+      text: t("share.nativeText", { year, state: STATES[st] }),
       url,
     };
     // 1) Nativer Teilen-Dialog (Mobil/unterstützte Geräte)
@@ -991,7 +991,7 @@ function Urlaubsplaner() {
     }
     // 2) Clipboard-API
     if (typeof navigator !== "undefined" && navigator.clipboard && navigator.clipboard.writeText) {
-      try { await navigator.clipboard.writeText(url); showToast("Link wurde kopiert."); return; }
+      try { await navigator.clipboard.writeText(url); showToast(t("share.toast.linkCopied")); return; }
       catch (e) { /* Fallback */ }
     }
     // 3) Manuelles Kopieren anbieten
@@ -1006,10 +1006,10 @@ function Urlaubsplaner() {
         const inp = document.getElementById("share-url-input");
         if (inp) { inp.focus(); inp.select(); document.execCommand("copy"); }
       }
-      showToast("Link wurde kopiert.");
+      showToast(t("share.toast.linkCopied"));
       setCopyUrl(null);
     } catch (e) {
-      showToast("Bitte den Link manuell markieren und kopieren.");
+      showToast(t("share.toast.copyManually"));
     }
   };
 
@@ -1039,9 +1039,9 @@ function Urlaubsplaner() {
       catch (e) { /* z. B. sandboxed Vorschau */ }
     };
     const toastFor = (res) => showToast(
-      !res ? "Die geteilte Planung konnte nicht geladen werden."
-        : res.warning ? "Geteilte Planung wurde teilweise geladen."
-        : "Geteilte Planung wurde geladen."
+      !res ? t("share.toast.loadFailed")
+        : res.warning ? t("share.toast.loadedPartially")
+        : t("share.toast.loadedFully")
     );
     if (!info || !info.had) {
       return () => { if (toastTimer.current) clearTimeout(toastTimer.current); };
@@ -1080,12 +1080,12 @@ function Urlaubsplaner() {
   const exportInfo = (p) => {
     const dtStart = ymdOf(days[p.s]);
     const dtEnd = ymdAfter(days[p.e]); // exklusiv, iCalendar-Standard
-    const desc = `${p.len} Tage frei – ${fmtNum(p.vac)} Urlaubstage${p.ot > 0 ? `, ${fmtNum(p.ot)} Überstundenabbau` : ""} (Urlaubsplaner)`;
+    const desc = t("exportCal.icsDescription", { len: p.len, vac: fmtNum(p.vac), ot: fmtNum(p.ot), otRaw: p.ot });
     return { dtStart, dtEnd, desc };
   };
   const googleUrl = (p) => {
     const { dtStart, dtEnd, desc } = exportInfo(p);
-    return `https://calendar.google.com/calendar/render?action=TEMPLATE&text=${encodeURIComponent("Urlaub")}` +
+    return `https://calendar.google.com/calendar/render?action=TEMPLATE&text=${encodeURIComponent(t("exportCal.eventTitle"))}` +
       `&dates=${dtStart}/${dtEnd}&details=${encodeURIComponent(desc)}`;
   };
   const downloadIcs = async (p) => {
@@ -1100,7 +1100,7 @@ function Urlaubsplaner() {
       `DTSTAMP:${stamp}`,
       `DTSTART;VALUE=DATE:${dtStart}`,
       `DTEND;VALUE=DATE:${dtEnd}`,
-      "SUMMARY:Urlaub",
+      `SUMMARY:${t("exportCal.eventTitle")}`,
       `DESCRIPTION:${desc.replace(/([,;])/g, "\\$1")}`,
       "END:VEVENT",
       "END:VCALENDAR",
@@ -1113,7 +1113,7 @@ function Urlaubsplaner() {
       try {
         const file = new File([ics], fileName, { type: "text/calendar" });
         if (navigator.canShare({ files: [file] })) {
-          await navigator.share({ files: [file], title: "Urlaub" });
+          await navigator.share({ files: [file], title: t("exportCal.eventTitle") });
           return;
         }
       } catch (err) {
@@ -1155,9 +1155,9 @@ function Urlaubsplaner() {
   // withHint=true zeigt zusätzlich den kurzen Hilfetext (nur im Profi-Modus nötig).
   const schoolPrefControl = (withHint) => (
     <div>
-      <span className={`block ${subLabelCls} mb-1`}>Wie sollen Schulferien bei deiner Planung berücksichtigt werden?</span>
+      <span className={`block ${subLabelCls} mb-1`}>{t("schoolHolidays.question")}</span>
       <div className="space-y-2">
-        {[["prefer", "In den Schulferien planen"], ["avoid", "Schulferien möglichst meiden"], ["neutral", "Keine Präferenz"]].map(([k, l]) => (
+        {[["prefer", t("schoolHolidays.preference.prefer")], ["avoid", t("schoolHolidays.preference.avoid")], ["neutral", t("schoolHolidays.preference.neutral")]].map(([k, l]) => (
           <label key={k} className={`flex items-center gap-2 text-sm cursor-pointer ${dark ? "text-slate-300" : "text-slate-700"}`}>
             <input type="radio" name="schoolPref" className="accent-emerald-600"
               checked={schoolHolidayPreference === k}
@@ -1168,7 +1168,7 @@ function Urlaubsplaner() {
       </div>
       {withHint && (
         <p className={`mt-1 text-[11px] leading-snug ${dark ? "text-slate-400" : "text-slate-500"}`}>
-          Bestimmt, ob automatisch erzeugte Urlaubsvorschläge bevorzugt innerhalb oder außerhalb der Schulferien liegen.
+          {t("schoolHolidays.hint")}
         </p>
       )}
     </div>
@@ -1235,7 +1235,7 @@ function Urlaubsplaner() {
     if (holidayNames.length > 0) {
       const shown = holidayNames.slice(0, 2);
       const rest = holidayNames.length - shown.length;
-      holidaysText = shown.join(", ") + (rest === 1 ? " + 1 weiterer" : rest > 1 ? ` + ${rest} weitere` : "");
+      holidaysText = shown.join(", ") + (rest === 1 ? t("calendar.summary.oneMore") : rest > 1 ? t("calendar.summary.nMore", { count: rest }) : "");
     }
 
     // --- Schulferien: Zeiträume aus "vacations" auf den Monat zuschneiden ---
@@ -1256,10 +1256,10 @@ function Urlaubsplaner() {
         const overlapS = Math.max(sTs, monthStart);
         const overlapE = Math.min(eTs, monthEnd);
         let dateText;
-        if (startsBefore && !endsAfter) dateText = `bis ${fmtDDMM(overlapE)}`;
-        else if (!startsBefore && endsAfter) dateText = `ab ${fmtDDMM(overlapS)}`;
-        else dateText = `${fmtDDMM(overlapS)}–${fmtDDMM(overlapE)}`;
-        const name = p.name_cp || p.name || "Schulferien";
+        if (startsBefore && !endsAfter) dateText = t("calendar.summary.rangeUntil", { date: fmtDDMM(overlapE) });
+        else if (!startsBefore && endsAfter) dateText = t("calendar.summary.rangeFrom", { date: fmtDDMM(overlapS) });
+        else dateText = t("calendar.summary.rangeBetween", { from: fmtDDMM(overlapS), to: fmtDDMM(overlapE) });
+        const name = p.name_cp || p.name || t("fallback.schoolHolidays");
         entries.push({ name, dateText, sortKey: overlapS });
       }
       // Nach Beginn sortieren, dann pro Name nur den ersten (chronologisch frühesten) Eintrag behalten
@@ -1274,7 +1274,7 @@ function Urlaubsplaner() {
       if (unique.length > 0) {
         const shown = unique.slice(0, 2);
         const rest = unique.length - shown.length;
-        vacationsText = shown.map((u) => `${u.name} ${u.dateText}`).join(", ") + (rest > 0 ? ` + ${rest} weitere` : "");
+        vacationsText = shown.map((u) => `${u.name} ${u.dateText}`).join(", ") + (rest > 0 ? t("calendar.summary.nMore", { count: rest }) : "");
       }
     }
 
@@ -1295,7 +1295,7 @@ function Urlaubsplaner() {
                   }`}>
                   <h3 className="text-sm font-bold mb-2">{mName}</h3>
                   <div className="grid grid-cols-7 gap-1 text-center text-[10px] text-slate-400 mb-1">
-                    {["Mo","Di","Mi","Do","Fr","Sa","So"].map((w) => <span key={w}>{w}</span>)}
+                    {t("calendar.weekdaysMonFirst").map((w) => <span key={w}>{w}</span>)}
                   </div>
                   <div className="grid grid-cols-7 gap-1">
                     {Array.from({ length: lead }).map((_, i) => <span key={`x${i}`} />)}
@@ -1313,7 +1313,10 @@ function Urlaubsplaner() {
                         : clickable ? "hover:ring-2 hover:ring-emerald-400" : "";
                       // Tooltip-Text für Ferien, z. B. "Sommerferien in Bayern · 2.8.2027 bis 14.9.2027"
                       const vacTipText = vac
-                        ? `${vac.name} in ${STATES[st]} · ${vac.start.toLocaleDateString("de-DE")} bis ${vac.end.toLocaleDateString("de-DE")}`
+                        ? t("calendar.vacationTooltip", {
+                            name: vac.name, state: STATES[st],
+                            start: vac.start.toLocaleDateString("de-DE"), end: vac.end.toLocaleDateString("de-DE"),
+                          })
                         : null;
                       return (
                         <button key={day.i} type="button"
@@ -1354,12 +1357,12 @@ function Urlaubsplaner() {
                     <div className={`mt-2 pt-2 border-t space-y-0.5 ${dark ? "border-slate-800" : "border-slate-100"}`}>
                       {summary.holidaysText && (
                         <p className={`text-[10px] leading-snug ${dark ? "text-rose-400/80" : "text-rose-600/80"}`}>
-                          Feiertage: {summary.holidaysText}
+                          {t("calendar.summary.publicHolidays")} {summary.holidaysText}
                         </p>
                       )}
                       {summary.vacationsText && (
                         <p className={`text-[10px] leading-snug ${dark ? "text-orange-400/80" : "text-orange-600/80"}`}>
-                          Schulferien: {summary.vacationsText}
+                          {t("calendar.summary.schoolHolidays")} {summary.vacationsText}
                         </p>
                       )}
                     </div>
@@ -1372,7 +1375,7 @@ function Urlaubsplaner() {
 
   // Dezenter Hinweis, falls die Schulferien nicht geladen werden konnten
   const vacNotice = vacStatus === "fehler" ? (
-    <p className="text-[11px] text-orange-500/80">Schulferien konnten derzeit nicht geladen werden.</p>
+    <p className="text-[11px] text-orange-500/80">{t("calendar.loadErrorHint")}</p>
   ) : null;
 
   // Strukturierte, dynamisch erzeugte Begründung für einen empfohlenen Zeitraum.
@@ -1390,8 +1393,8 @@ function Urlaubsplaner() {
     for (let k = p.s; k <= p.e; k++) {
       const d = days[k];
       if (d.holiday && !seen.has(d.holiday)) { seen.add(d.holiday); holidayNames.push(d.holiday); }
-      if (d.special === "Heiligabend") hasXmasEve = true;
-      if (d.special === "Silvester") hasNYE = true;
+      if (d.special === t("special.christmasEve")) hasXmasEve = true;
+      if (d.special === t("special.newYearsEve")) hasNYE = true;
       if (d.weekend) { if (!inWeekend) { weekends++; inWeekend = true; } } else inWeekend = false;
     }
     const invested = p.vac + p.ot;
@@ -1401,27 +1404,27 @@ function Urlaubsplaner() {
     const xmas = holidayNames.some((n) => n.includes("Weihnachtstag"));
     if (xmas && (hasXmasEve || hasNYE)) {
       // Weihnachts-/Silvester-Serie
-      if (hasXmasEve && hasNYE) reason = "Die Weihnachtsfeiertage sowie Heiligabend und Silvester werden verbunden.";
-      else if (hasXmasEve) reason = "Die Weihnachtsfeiertage und Heiligabend werden verbunden.";
-      else reason = "Die Weihnachtsfeiertage und Silvester werden verbunden.";
+      if (hasXmasEve && hasNYE) reason = t("results.reason.xmasBoth");
+      else if (hasXmasEve) reason = t("results.reason.xmasEveOnly");
+      else reason = t("results.reason.xmasNyeOnly");
     } else {
       // Namen für den Satz wählen: Feiertage bevorzugt, sonst Sondertage
       let names = holidayNames.slice();
       if (names.length === 0) {
-        if (hasXmasEve) names.push("Heiligabend");
-        if (hasNYE) names.push("Silvester");
+        if (hasXmasEve) names.push(t("special.christmasEve"));
+        if (hasNYE) names.push(t("special.newYearsEve"));
       }
       names = names.slice(0, 2);
       if (names.length > 0) {
-        const subject = names.length === 2 ? `${names[0]} und ${names[1]}` : names[0];
+        const subject = names.length === 2 ? `${names[0]}${t("results.andSeparator")}${names[1]}` : names[0];
         const plural = names.length > 1;
-        if (weekends >= 2) reason = `${subject} ${plural ? "werden" : "wird"} mit zwei Wochenenden verbunden.`;
-        else reason = `${subject} verlängert${plural ? "n" : ""} den freien Zeitraum.`;
+        if (weekends >= 2) reason = t("results.reason.namedTwoWeekends", { subject, plural });
+        else reason = t("results.reason.namedExtends", { subject, plural });
       } else if (invested > 0) {
         // kein Feiertag/Sondertag – rein über Urlaubstage erzeugter Zeitraum
-        if (weekends >= 2) reason = "Urlaubstage verbinden zwei Wochenenden zu einem längeren freien Zeitraum.";
-        else if (weekends === 1) reason = "Urlaubstage verlängern ein Wochenende zu einem längeren freien Zeitraum.";
-        else reason = "Urlaubstage ergeben einen längeren freien Zeitraum.";
+        if (weekends >= 2) reason = t("results.reason.vacTwoWeekends");
+        else if (weekends === 1) reason = t("results.reason.vacOneWeekend");
+        else reason = t("results.reason.vacOnly");
       }
       // invested === 0 ohne Feiertag: nichts Sinnvolles zu sagen -> reason bleibt null
     }
@@ -1434,9 +1437,9 @@ function Urlaubsplaner() {
       if (ferienTage > 0) {
         if (schoolHolidayPreference === "avoid") {
           holidayConflict = true;
-          holidayNote = `Überschneidet sich an ${ferienTage} ${ferienTage === 1 ? "Tag" : "Tagen"} mit den Schulferien. Deine Auswahl wird als Präferenz und nicht als Ausschluss behandelt.`;
+          holidayNote = t("results.warning.schoolHolidayOverlap", { count: ferienTage });
         } else {
-          holidayNote = "Liegt wie gewünscht teilweise in den Schulferien.";
+          holidayNote = t("results.note.schoolHolidayMatch");
         }
       }
     }
@@ -1475,12 +1478,12 @@ function Urlaubsplaner() {
         <div className="max-w-6xl mx-auto px-4 py-6 flex flex-wrap items-end justify-between gap-4">
           <div>
             <p className="text-xs font-semibold uppercase tracking-widest text-emerald-400 mb-1">
-              Feiertage · Brückentage · {STATES[st]}
+              {t("header.tagline", { state: STATES[st] })}
             </p>
-            <h1 className="text-3xl font-bold tracking-tight">Urlaubsplaner {year}</h1>
+            <h1 className="text-3xl font-bold tracking-tight">{t("header.title", { year })}</h1>
           </div>
           <div className="flex items-center gap-1 rounded-md border border-slate-600 p-1 self-start">
-            {[["einfach", "Einfach"], ["profi", "Profi"]].map(([k, l]) => (
+            {[["einfach", t("nav.simpleMode")], ["profi", t("nav.proMode")]].map(([k, l]) => (
               <button key={k}
                 onClick={() => {
                   setUiMode(k);
@@ -1496,25 +1499,24 @@ function Urlaubsplaner() {
           </div>
           <button onClick={handleShare}
             className="self-start inline-flex items-center gap-1.5 rounded-md border border-slate-600 px-2.5 py-1 text-xs font-semibold text-slate-300 hover:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-emerald-500"
-            aria-label="Aktuelle Planung als Link teilen"
-            title="Aktuelle Planung als Link teilen">
+            aria-label={t("share.ariaLabel")}
+            title={t("share.title")}>
             <svg aria-hidden="true" viewBox="0 0 24 24" width="14" height="14" fill="none"
               stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <circle cx="18" cy="5" r="3" /><circle cx="6" cy="12" r="3" /><circle cx="18" cy="19" r="3" />
               <line x1="8.6" y1="10.6" x2="15.4" y2="6.4" /><line x1="8.6" y1="13.4" x2="15.4" y2="17.6" />
             </svg>
-            Planung teilen
+            {t("share.button")}
           </button>
           <button onClick={() => setDark(!dark)}
             className="self-start rounded-md border border-slate-600 px-2.5 py-1 text-xs font-semibold text-slate-300 hover:bg-slate-800"
-            title="Zwischen Dark-Mode und hellem Modus umschalten">
-            {dark ? "\u2600\ufe0f Heller Modus" : "\ud83c\udf19 Dark-Mode"}
+            title={t("theme.toggleTitle")}>
+            {dark ? t("theme.toLight") : t("theme.toDark")}
           </button>
           <div className="text-right">
             <p className="text-4xl font-bold tabular-nums text-emerald-400">{totalFree}</p>
             <p className="text-xs text-slate-300">
-              freie Tage am Stück aus {fmtNum(usedVac)} Urlaubs-
-              {usedOt > 0 ? ` + ${fmtNum(usedOt)} Überstunden-` : ""}Tagen
+              {t("header.freeDaysSuffix", { usedVac: fmtNum(usedVac), usedOt: usedOt > 0 ? fmtNum(usedOt) : 0 })}
             </p>
           </div>
         </div>
@@ -1528,10 +1530,10 @@ function Urlaubsplaner() {
                 es gibt keine neue Berechnungslogik. */}
             <aside className="space-y-4">
               <section className={`${cardCls} p-5 space-y-5`}>
-                <h2 className="text-sm font-bold">Deine Planung – Schritt für Schritt</h2>
+                <h2 className="text-sm font-bold">{t("simple.stepperTitle")}</h2>
 
                 <div className="space-y-2">
-                  <p className={labelCls}>1 · Wie viele Urlaubstage hast du?</p>
+                  <p className={labelCls}>{t("simple.step1Question")}</p>
                   <div className="flex items-center gap-3">
                     <button onClick={() => setVac(String(Math.max(0, num(vac) - 1)))}
                       className={`w-10 h-10 rounded-md border text-lg font-bold ${dark ? "border-slate-600 text-slate-200 hover:bg-slate-800" : "border-slate-300 text-slate-700 hover:bg-slate-100"}`}>
@@ -1546,7 +1548,7 @@ function Urlaubsplaner() {
                 </div>
 
                 <div className="space-y-2">
-                  <p className={labelCls}>2 · Für welches Jahr möchtest du planen?</p>
+                  <p className={labelCls}>{t("simple.step2Question")}</p>
                   {/* Immer genau drei Jahre: aktuelles Jahr, +1, +2 – aktualisiert sich selbst */}
                   <select className={inputCls} value={year}
                     onChange={(e) => {
@@ -1561,7 +1563,7 @@ function Urlaubsplaner() {
                 </div>
 
                 <div className="space-y-2">
-                  <p className={labelCls}>3 · In welchem Bundesland arbeitest du?</p>
+                  <p className={labelCls}>{t("simple.step3Question")}</p>
                   <select className={inputCls} value={st} onChange={(e) => setSt(e.target.value)}>
                     {Object.entries(STATES).map(([k, v]) => (
                       <option key={k} value={k}>{v}</option>
@@ -1570,11 +1572,11 @@ function Urlaubsplaner() {
                 </div>
 
                 <div className="space-y-2">
-                  <p className={labelCls}>4 · Wie gelten der 24.12. und 31.12. bei dir?</p>
+                  <p className={labelCls}>{t("simple.step4Question")}</p>
                   <div className="space-y-2">
-                    {[["100", "Ich muss jeweils einen ganzen Urlaubstag nehmen."],
-                      ["50", "Sie zählen jeweils als halber Urlaubstag."],
-                      ["0", "Ich habe an beiden Tagen frei und benötige keinen Urlaub."]].map(([k, l]) => (
+                    {[["100", t("simple.step4Options.full")],
+                      ["50", t("simple.step4Options.half")],
+                      ["0", t("simple.step4Options.none")]].map(([k, l]) => (
                       <label key={k} className={`flex items-start gap-2 text-sm cursor-pointer ${dark ? "text-slate-300" : "text-slate-700"}`}>
                         <input type="radio" name="simpleXmas" className="mt-0.5 accent-emerald-600"
                           checked={xmasRule === k} onChange={() => setXmasRule(k)} />
@@ -1583,15 +1585,14 @@ function Urlaubsplaner() {
                     ))}
                   </div>
                   <p className={`text-[11px] leading-snug ${dark ? "text-slate-500" : "text-slate-400"}`}>
-                    Viele Arbeitgeber behandeln Heiligabend und Silvester unterschiedlich. Wähle einfach die
-                    Regel aus, die für dich gilt.
+                    {t("simple.step4Hint")}
                   </p>
                 </div>
 
                 <div className="space-y-2">
-                  <p className={labelCls}>5 · Wie sollen Schulferien berücksichtigt werden?</p>
+                  <p className={labelCls}>{t("simple.step5Question")}</p>
                   <div className="space-y-2">
-                    {[["prefer", "In den Schulferien planen"], ["avoid", "Schulferien möglichst meiden"], ["neutral", "Keine Präferenz"]].map(([k, l]) => (
+                    {[["prefer", t("schoolHolidays.preference.prefer")], ["avoid", t("schoolHolidays.preference.avoid")], ["neutral", t("schoolHolidays.preference.neutral")]].map(([k, l]) => (
                       <label key={k} className={`flex items-center gap-2 text-sm cursor-pointer ${dark ? "text-slate-300" : "text-slate-700"}`}>
                         <input type="radio" name="schoolPrefSimple" className="accent-emerald-600"
                           checked={schoolHolidayPreference === k}
@@ -1603,9 +1604,9 @@ function Urlaubsplaner() {
                 </div>
 
                 <div className="space-y-2">
-                  <p className={labelCls}>6 · Was ist dir wichtig?</p>
+                  <p className={labelCls}>{t("simple.step6Question")}</p>
                   <div className="space-y-2">
-                    {[["free", "Möglichst viele freie Tage"], ["blocks", "Lange Urlaubsblöcke"], ["short", "Viele Kurzurlaube"], ["custom", "Eigene Planung (Profi-Modus)"]].map(([k, l]) => (
+                    {[["free", t("simple.goal.free")], ["blocks", t("simple.goal.blocks")], ["short", t("simple.goal.short")], ["custom", t("simple.goal.custom")]].map(([k, l]) => (
                       <label key={k} className={`flex items-center gap-2 text-sm cursor-pointer ${dark ? "text-slate-300" : "text-slate-700"}`}>
                         <input type="radio" name="simpleGoal" className="accent-emerald-600"
                           checked={k !== "custom" && simpleGoal === k}
@@ -1618,7 +1619,7 @@ function Urlaubsplaner() {
 
                 <button onClick={() => { applySimpleGoal(simpleGoal); setSimpleStarted(true); }}
                   className="w-full rounded-lg bg-emerald-600 px-4 py-3 text-sm font-bold text-white hover:bg-emerald-700">
-                  Beste Planung berechnen
+                  {t("simple.calcButton")}
                 </button>
               </section>
             </aside>
@@ -1628,34 +1629,34 @@ function Urlaubsplaner() {
               {!simpleStarted ? (
                 <section className={`${cardCls} p-8 text-center`}>
                   <p className={`text-sm ${dark ? "text-slate-400" : "text-slate-500"}`}>
-                    Wähle links deine Angaben und klicke auf „Beste Planung berechnen".
+                    {t("simple.notStartedHint")}
                   </p>
                 </section>
               ) : (
                 <div className="space-y-6" style={{ animation: "upFade .35s ease" }}>
                   <section className={`${cardCls} p-6`}>
-                    <h2 className="text-sm font-bold mb-3">Deine optimale Urlaubsplanung</h2>
+                    <h2 className="text-sm font-bold mb-3">{t("simple.resultHeading")}</h2>
                     <div className="flex flex-wrap items-center gap-x-10 gap-y-4">
                       <div>
                         <p className={`text-6xl font-bold tabular-nums ${dark ? "text-emerald-400" : "text-emerald-600"}`}>{totalFree}</p>
-                        <p className={`text-sm ${dark ? "text-slate-400" : "text-slate-500"}`}>freie Tage</p>
+                        <p className={`text-sm ${dark ? "text-slate-400" : "text-slate-500"}`}>{t("simple.freeDaysLabel")}</p>
                       </div>
                       <div className={`text-sm space-y-1 ${dark ? "text-slate-300" : "text-slate-600"}`}>
-                        <p>+{weekdayHolidayCount} Feiertage optimal genutzt</p>
-                        <p>+{fmtNum(usedVac)} Brückentage eingesetzt</p>
-                        <p>{totalFree} freie Tage insgesamt</p>
+                        <p>{t("simple.statHolidaysUsed", { count: weekdayHolidayCount })}</p>
+                        <p>{t("simple.statBridgeDaysUsed", { count: fmtNum(usedVac) })}</p>
+                        <p>{t("simple.statTotalFree", { count: totalFree })}</p>
                       </div>
                     </div>
                     <p className={`mt-4 text-sm ${dark ? "text-slate-400" : "text-slate-500"}`}>
-                      Mit {fmtNum(usedVac)} von {fmtNum(num(vac))} Urlaubstagen erhältst du insgesamt {totalFree} freie Tage.
+                      {t("simple.summarySentence", { usedVac: fmtNum(usedVac), totalVac: fmtNum(num(vac)), totalFree })}
                     </p>
                   </section>
 
                   <section className={`${cardCls} p-4`}>
-                    <h3 className="text-sm font-bold mb-2">Empfohlene Urlaubsblöcke</h3>
+                    <h3 className="text-sm font-bold mb-2">{t("simple.recommendedBlocksHeading")}</h3>
                     {result.periods.length === 0 ? (
                       <p className={`text-sm ${dark ? "text-slate-400" : "text-slate-500"}`}>
-                        Keine Vorschläge gefunden – erhöhe die Anzahl deiner Urlaubstage.
+                        {t("simple.noSuggestions")}
                       </p>
                     ) : (
                       <ul className={`divide-y ${dark ? "divide-slate-800" : "divide-slate-100"}`}>
@@ -1663,13 +1664,13 @@ function Urlaubsplaner() {
                           <li key={i} role="button" tabIndex={0}
                             onClick={() => scrollToPeriod(p)}
                             onKeyDown={(e) => onRowKeyDown(e, p)}
-                            title="Zum Monat im Kalender springen"
+                            title={t("simple.jumpToMonthTitle")}
                             className={`py-2 flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 text-sm cursor-pointer rounded-md focus:outline-none focus:ring-2 focus:ring-emerald-500 ${
                               dark ? "active:bg-slate-800/60" : "active:bg-slate-100"
                             }`}>
                             <span className="font-medium">{fmtDate(days[p.s])} – {fmtDate(days[p.e])}</span>
                             <span className={`tabular-nums flex items-center gap-1 ${dark ? "text-slate-400" : "text-slate-500"}`}>
-                              <span>{p.len} freie Tage · {fmtNum(p.vac)} Urlaubstag{p.vac === 1 ? "" : "e"}</span>
+                              <span>{t("simple.periodFreeDaysLabel", { len: p.len, vac: fmtNum(p.vac), vacRaw: p.vac })}</span>
                               <span aria-hidden="true" className={dark ? "text-slate-600" : "text-slate-300"}>›</span>
                             </span>
                             {reasonLines(p)}
@@ -1683,7 +1684,7 @@ function Urlaubsplaner() {
                     className={`w-full rounded-lg border px-4 py-3 text-sm font-bold ${
                       dark ? "border-slate-600 text-slate-200 hover:bg-slate-800" : "border-slate-300 text-slate-700 hover:bg-slate-100"
                     }`}>
-                    {showSimpleCal ? "Kalender ausblenden" : "Kalender anzeigen"}
+                    {showSimpleCal ? t("simple.hideCalendar") : t("simple.showCalendar")}
                   </button>
                   {showSimpleCal && (
                     <div style={{ animation: "upFade .35s ease" }}>
@@ -1702,11 +1703,11 @@ function Urlaubsplaner() {
           <div key="profi" className="grid gap-6 lg:grid-cols-[320px_1fr]" style={{ animation: "upFade .35s ease" }}>
         {/* Einstellungen */}
         <aside className="space-y-4">
-              <CollapsibleCard icon="📅" title="Allgemein" open={panels.allgemein}
+              <CollapsibleCard icon="📅" title={t("settings.panelTitle")} open={panels.allgemein}
                 onToggle={() => togglePanel("allgemein")} dark={dark} cardCls={cardCls}>
                 <div className="grid grid-cols-2 gap-3">
                   <div>
-                    <label className={labelCls}>Jahr</label>
+                    <label className={labelCls}>{t("settings.year")}</label>
                     <select className={inputCls} value={year}
                       onChange={(e) => {
                         const y = parseInt(e.target.value, 10);
@@ -1719,7 +1720,7 @@ function Urlaubsplaner() {
                     </select>
                   </div>
                   <div>
-                    <label className={labelCls}>Bundesland</label>
+                    <label className={labelCls}>{t("settings.federalState")}</label>
                     <select className={inputCls} value={st} onChange={(e) => setSt(e.target.value)}>
                       {Object.entries(STATES).map(([k, v]) => (
                         <option key={k} value={k}>{v}</option>
@@ -1727,54 +1728,54 @@ function Urlaubsplaner() {
                     </select>
                   </div>
                   <div>
-                    <label className={labelCls}>Urlaubstage</label>
+                    <label className={labelCls}>{t("settings.vacationDays")}</label>
                     <input className={inputCls} type="number" min="0" step="0.5" value={vac}
                       onFocus={selectAllOnFocus} onChange={(e) => setVac(e.target.value)} />
                   </div>
                   <div>
-                    <label className={labelCls}>Überstundenabbau (Tage)</label>
+                    <label className={labelCls}>{t("settings.overtimeDaysLabel")}</label>
                     <input className={inputCls} type="number" min="0" step="0.5" value={ot}
                       onFocus={selectAllOnFocus} onChange={(e) => setOt(e.target.value)} />
                   </div>
                 </div>
                 <p className="text-[11px] text-slate-400">
-                  Feiertagsquelle:{" "}
-                  {apiStatus === "api" && <span className="text-emerald-600 font-semibold">feiertage-api.de (online)</span>}
-                  {apiStatus === "laedt" && "wird geladen …"}
-                  {apiStatus === "lokal" && "integrierte Berechnung (API nicht erreichbar)"}
+                  {t("settings.holidaySource")}{" "}
+                  {apiStatus === "api" && <span className="text-emerald-600 font-semibold">{t("settings.holidaySourceApi")}</span>}
+                  {apiStatus === "laedt" && t("settings.holidaySourceLoading")}
+                  {apiStatus === "lokal" && t("settings.holidaySourceLocal")}
                 </p>
               </CollapsibleCard>
 
-              <CollapsibleCard icon="⚙" title="Arbeitsregelung" open={panels.regelung}
+              <CollapsibleCard icon="⚙" title={t("workRules.panelTitle")} open={panels.regelung}
                 onToggle={() => togglePanel("regelung")} dark={dark} cardCls={cardCls}>
                 <div>
-                  <label className={labelCls}>24.12. und 31.12. zählen als</label>
+                  <label className={labelCls}>{t("workRules.xmasLabel")}</label>
                   <select className={inputCls} value={xmasRule} onChange={(e) => setXmasRule(e.target.value)}>
-                    <option value="100">voller Urlaubstag (100 %)</option>
-                    <option value="50">halber Urlaubstag (50 %)</option>
-                    <option value="0">frei – kein Urlaubstag (0 %)</option>
+                    <option value="100">{t("workRules.xmasOptionFull")}</option>
+                    <option value="50">{t("workRules.xmasOptionHalf")}</option>
+                    <option value="0">{t("workRules.xmasOptionNone")}</option>
                   </select>
                 </div>
                 <label className={`flex items-start gap-2 text-sm ${dark ? "text-slate-300" : "text-slate-700"}`}>
                   <input type="checkbox" className="mt-0.5 accent-emerald-600" checked={showWeekendHolidays}
                     onChange={(e) => setShowWeekendHolidays(e.target.checked)} />
-                  <span>Feiertage an Samstag/Sonntag einbeziehen</span>
+                  <span>{t("workRules.includeWeekendHolidays")}</span>
                 </label>
               </CollapsibleCard>
 
-              <CollapsibleCard icon="🤖" title="Automatische Planung" open={panels.auto}
+              <CollapsibleCard icon="🤖" title={t("auto.panelTitle")} open={panels.auto}
                 onToggle={() => togglePanel("auto")} dark={dark} cardCls={cardCls}>
                 <div className="flex items-center justify-between">
-                  <span className={subLabelCls}>Budget der Automatik</span>
+                  <span className={subLabelCls}>{t("auto.budgetLabel")}</span>
                   <button onClick={() => { setAutoVac(""); setAutoOt("0"); }}
                     className="text-[11px] font-semibold text-emerald-600 hover:underline">
-                    auf Minimum
+                    {t("auto.toMinimum")}
                   </button>
                 </div>
                 <div className="space-y-3">
                   <div>
                     <div className="flex items-baseline justify-between mb-1">
-                      <span className={subLabelCls}>Urlaubstage nutzen</span>
+                      <span className={subLabelCls}>{t("auto.useVacationDays")}</span>
                       <span className={`text-xs font-bold tabular-nums ${dark ? "text-emerald-300" : "text-emerald-800"}`}>
                         {fmtNum(Math.min(effAutoVac, num(vac)))} / {fmtNum(num(vac))}
                       </span>
@@ -1786,7 +1787,7 @@ function Urlaubsplaner() {
                   </div>
                   <div>
                     <div className="flex items-baseline justify-between mb-1">
-                      <span className={subLabelCls}>Überstd.-Tage nutzen</span>
+                      <span className={subLabelCls}>{t("auto.useOvertimeDays")}</span>
                       <span className={`text-xs font-bold tabular-nums ${dark ? "text-emerald-300" : "text-emerald-800"}`}>
                         {fmtNum(Math.min(effAutoOt, num(ot)))} / {fmtNum(num(ot))}
                       </span>
@@ -1798,7 +1799,7 @@ function Urlaubsplaner() {
                   </div>
                 </div>
                 <div>
-                  <span className={`block ${subLabelCls} mb-1`}>Ab Monat</span>
+                  <span className={`block ${subLabelCls} mb-1`}>{t("auto.fromMonth")}</span>
                   <select className={inputCls} value={autoFrom}
                     onChange={(e) => setAutoFrom(parseInt(e.target.value, 10))}>
                     {MONTHS.map((m, mi) => (
@@ -1807,9 +1808,9 @@ function Urlaubsplaner() {
                   </select>
                 </div>
                 <div>
-                  <span className={`block ${subLabelCls} mb-1`}>Zuerst aufbrauchen</span>
+                  <span className={`block ${subLabelCls} mb-1`}>{t("auto.spendFirst")}</span>
                   <div className={`grid grid-cols-2 gap-1 rounded-md border p-1 ${dark ? "bg-slate-800 border-slate-600" : "bg-white border-slate-200"}`}>
-                    {[["vac", "Urlaubstage"], ["ot", "Überstunden"]].map(([k, l]) => (
+                    {[["vac", t("auto.spendFirstVac")], ["ot", t("auto.spendFirstOt")]].map(([k, l]) => (
                       <button key={k} onClick={() => setSpendFirst(k)}
                         className={`rounded px-2 py-1 text-xs font-semibold transition-colors ${
                           spendFirst === k
@@ -1823,23 +1824,23 @@ function Urlaubsplaner() {
                 </div>
                 {schoolPrefControl(true)}
                 <p className={`text-[11px] leading-snug ${dark ? "text-slate-400" : "text-slate-500"}`}>
-                  Start: Minimum von {fmtNum(Math.min(minBudget, num(vac)))} Tagen – nur 1-Tages-Brücken.
-                  <InfoHint dark={dark} text="Mit dem Minimum kauft die Automatik ausschließlich isolierte 1-Tages-Lücken – 1 eingesetzter Tag erzeugt 4 freie Tage am Stück. Mehr Budget schaltet schrittweise 2-, 3- und 4-Tages-Lücken frei. „Ab Monat“ begrenzt nur die Automatik; Wunschblöcke und manuelle Klicks sind davon unabhängig und nutzen das volle Budget. Die Regler sind auf deine Angaben begrenzt." />
+                  {t("auto.minimumHintPrefix", { days: fmtNum(Math.min(minBudget, num(vac))) })}
+                  <InfoHint dark={dark} text={t("auto.minimumHintDetail")} />
                 </p>
               </CollapsibleCard>
 
-              <CollapsibleCard icon="⭐" title="Wunschblöcke" open={panels.bloecke}
+              <CollapsibleCard icon="⭐" title={t("blocks.panelTitle")} open={panels.bloecke}
                 onToggle={() => togglePanel("bloecke")} dark={dark} cardCls={cardCls}>
                 <div className="flex items-center justify-between">
-                  <span className={`text-xs ${dark ? "text-slate-400" : "text-slate-500"}`}>werden priorisiert</span>
+                  <span className={`text-xs ${dark ? "text-slate-400" : "text-slate-500"}`}>{t("blocks.prioritizedHint")}</span>
                   <button onClick={addBlock}
                     className="rounded-md bg-emerald-600 px-2.5 py-1 text-xs font-semibold text-white hover:bg-emerald-700">
-                    + Block
+                    {t("blocks.addButton")}
                   </button>
                 </div>
                 {blocks.length === 0 && (
                   <p className={`text-xs ${dark ? "text-slate-400" : "text-slate-500"}`}>
-                    Noch keine Blöcke – lege fest, wie viele Tage am Stück du frei haben willst.
+                    {t("blocks.emptyHint")}
                   </p>
                 )}
                 {blocks.map((b, i) => {
@@ -1848,21 +1849,21 @@ function Urlaubsplaner() {
                     <div key={i} className={`rounded-lg border p-2.5 space-y-2 ${dark ? "border-slate-700" : "border-slate-200"}`}>
                       <div className="grid grid-cols-3 gap-2">
                         <div>
-                          <label className={labelCls}>Tage frei</label>
+                          <label className={labelCls}>{t("blocks.freeDaysLabel")}</label>
                           <input className={inputCls} type="number" min="1" value={b.len}
                             onFocus={selectAllOnFocus} onChange={(e) => updBlock(i, { len: e.target.value })} />
                         </div>
                         <div>
-                          <label className={labelCls}>Monat</label>
+                          <label className={labelCls}>{t("blocks.monthLabel")}</label>
                           <select className={inputCls} value={b.month} onChange={(e) => updBlock(i, { month: e.target.value })}>
-                            <option value="">egal</option>
+                            <option value="">{t("blocks.monthAny")}</option>
                             {MONTHS.map((m, mi) => (
                               <option key={mi} value={mi}>{m}</option>
                             ))}
                           </select>
                         </div>
                         <div>
-                          <label className={labelCls}>Überstd.-Tage</label>
+                          <label className={labelCls}>{t("blocks.overtimeDaysLabel")}</label>
                           <input className={inputCls} type="number" min="0" step="0.5" placeholder="0" value={b.ot}
                             onFocus={selectAllOnFocus} onChange={(e) => updBlock(i, { ot: e.target.value })} />
                         </div>
@@ -1871,13 +1872,13 @@ function Urlaubsplaner() {
                         <p className="text-xs">
                           {r?.placed ? (
                             <span className="text-emerald-700">
-                              {fmtDate(days[r.start])} – {fmtDate(days[r.end])} · kostet {fmtNum(r.cost)} Tage
+                              {t("blocks.placed", { start: fmtDate(days[r.start]), end: fmtDate(days[r.end]), cost: fmtNum(r.cost) })}
                             </span>
                           ) : (
-                            <span className="text-rose-600">Keine Platzierung möglich (Budget oder Monat prüfen)</span>
+                            <span className="text-rose-600">{t("blocks.notPlaced")}</span>
                           )}
                         </p>
-                        <button onClick={() => delBlock(i)} className="text-xs text-slate-400 hover:text-rose-600">Entfernen</button>
+                        <button onClick={() => delBlock(i)} className="text-xs text-slate-400 hover:text-rose-600">{t("blocks.removeButton")}</button>
                       </div>
                     </div>
                   );
@@ -1890,11 +1891,11 @@ function Urlaubsplaner() {
           {/* Kennzahlen */}
           <section className="grid grid-cols-2 sm:grid-cols-4 gap-3">
             {[
-              { v: fmtNum(leverage), l: "freie Tage pro eingesetztem Tag" },
-              { v: longest, l: "längste freie Serie (Tage)" },
+              { v: fmtNum(leverage), l: t("metrics.leverage") },
+              { v: longest, l: t("metrics.longestStreak") },
               { v: showWeekendHolidays ? `${weekdayHolidayCount} + ${weekendHolidayCount}` : weekdayHolidayCount,
-                l: showWeekendHolidays ? "Feiertage Mo–Fr + Sa/So" : "Feiertage an Werktagen" },
-              { v: `${fmtNum(result.budget.vac)} / ${fmtNum(result.budget.ot)}`, l: "übrig: Urlaub / Überstunden" },
+                l: showWeekendHolidays ? t("metrics.holidaysWithWeekend") : t("metrics.holidaysWorkdaysOnly") },
+              { v: `${fmtNum(result.budget.vac)} / ${fmtNum(result.budget.ot)}`, l: t("metrics.remaining") },
             ].map((s, i) => (
               <div key={i} className={`${cardCls} p-3 text-center`}>
                 <p className="text-2xl font-bold tabular-nums">{s.v}</p>
@@ -1905,50 +1906,50 @@ function Urlaubsplaner() {
 
           {/* Freie Perioden */}
           <section className={`${cardCls} p-4`}>
-            <h2 className="text-sm font-bold mb-2">Deine freien Zeiträume</h2>
+            <h2 className="text-sm font-bold mb-2">{t("results.periodsHeading")}</h2>
             {result.periods.length === 0 ? (
-              <p className={`text-sm ${dark ? "text-slate-400" : "text-slate-500"}`}>Gib Urlaubstage ein, um Vorschläge zu sehen.</p>
+              <p className={`text-sm ${dark ? "text-slate-400" : "text-slate-500"}`}>{t("results.periodsEmptyHint")}</p>
             ) : (
               <ul className={`divide-y ${dark ? "divide-slate-800" : "divide-slate-100"}`}>
                 {result.periods.map((p, i) => (
                   <li key={i} role="button" tabIndex={0}
                     onClick={() => scrollToPeriod(p)}
                     onKeyDown={(e) => onRowKeyDown(e, p)}
-                    title="Zum Monat im Kalender springen"
+                    title={t("results.jumpToMonthTitle")}
                     className={`py-2 flex flex-wrap items-center justify-between gap-x-4 gap-y-1 text-sm cursor-pointer rounded-md focus:outline-none focus:ring-2 focus:ring-emerald-500 ${
                       dark ? "active:bg-slate-800/60" : "active:bg-slate-100"
                     }`}>
                     <span className="flex flex-wrap items-center gap-2 font-medium">
                       {fmtDate(days[p.s])} – {fmtDate(days[p.e])}
                       {p.origins.includes("block") && (
-                        <span className="rounded-full bg-violet-100 px-2 py-0.5 text-[10px] font-semibold text-violet-700">Wunschblock</span>
+                        <span className="rounded-full bg-violet-100 px-2 py-0.5 text-[10px] font-semibold text-violet-700">{t("results.badgeBlock")}</span>
                       )}
                       {p.origins.includes("manual") && (
-                        <span className="rounded-full bg-slate-700 px-2 py-0.5 text-[10px] font-semibold text-white">manuell</span>
+                        <span className="rounded-full bg-slate-700 px-2 py-0.5 text-[10px] font-semibold text-white">{t("results.badgeManual")}</span>
                       )}
                       {p.origins.includes("auto") && (
-                        <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-semibold text-emerald-700">automatisch</span>
+                        <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-semibold text-emerald-700">{t("results.badgeAuto")}</span>
                       )}
                     </span>
                     <span className="flex items-center gap-3">
                       <span className={`tabular-nums ${dark ? "text-slate-400" : "text-slate-500"}`}>
-                        {p.len} Tage frei · {fmtNum(p.vac)} Urlaub{p.ot > 0 ? ` · ${fmtNum(p.ot)} Überstunden` : ""}
+                        {t("results.periodSummary", { len: p.len, vac: fmtNum(p.vac), ot: fmtNum(p.ot), otRaw: p.ot })}
                       </span>
                       <span className="flex items-center gap-1.5">
                         <button onClick={(e) => { e.stopPropagation(); downloadIcs(p); }}
-                          title="Als .ics-Datei herunterladen (Apple Kalender, Outlook, iCal)"
+                          title={t("results.icsTitle")}
                           className={`rounded-md border px-2 py-0.5 text-[11px] font-semibold ${
                             dark ? "border-slate-600 text-slate-300 hover:bg-slate-800" : "border-slate-300 text-slate-600 hover:bg-slate-100"
                           }`}>
-                          ICS/iCal
+                          {t("results.icsButton")}
                         </button>
                         <a href={googleUrl(p)} target="_blank" rel="noopener noreferrer"
                           onClick={(e) => e.stopPropagation()}
-                          title="In Google Kalender öffnen (vorausgefüllter Termin)"
+                          title={t("results.googleTitle")}
                           className={`rounded-md border px-2 py-0.5 text-[11px] font-semibold ${
                             dark ? "border-slate-600 text-slate-300 hover:bg-slate-800" : "border-slate-300 text-slate-600 hover:bg-slate-100"
                           }`}>
-                          Google
+                          {t("results.googleButton")}
                         </a>
                       </span>
                       <span aria-hidden="true" className={`hidden sm:inline-block ${dark ? "text-slate-600" : "text-slate-300"}`}>›</span>
@@ -1963,9 +1964,9 @@ function Urlaubsplaner() {
           {/* Manuell planen + Legende */}
           <section className={`${cardCls} p-3 space-y-2`}>
             <div className="flex flex-wrap items-center gap-3">
-              <span className={subLabelCls}>Klick im Kalender setzt</span>
+              <span className={subLabelCls}>{t("manual.clickSetsLabel")}</span>
               <div className={`grid grid-cols-2 gap-1 rounded-md border p-1 ${dark ? "border-slate-600" : "border-slate-200"}`}>
-                {[["vac", "Urlaubstag"], ["ot", "Überstundenabbau"]].map(([k, l]) => (
+                {[["vac", t("manual.vacationDay")], ["ot", t("manual.overtimeReduction")]].map(([k, l]) => (
                   <button key={k} onClick={() => setClickMode(k)}
                     className={`rounded px-2 py-1 text-xs font-semibold transition-colors ${
                       clickMode === k
@@ -1979,27 +1980,27 @@ function Urlaubsplaner() {
               {Object.keys(overrides).length > 0 && (
                 <button onClick={() => setOverrides({})}
                   className="text-xs text-slate-400 hover:text-rose-600">
-                  Manuelle Änderungen zurücksetzen ({Object.keys(overrides).length})
+                  {t("manual.resetButton", { count: Object.keys(overrides).length })}
                 </button>
               )}
             </div>
             {result.failedManual > 0 && (
               <p className="text-xs font-semibold text-rose-600">
                 {result.failedManual === 1
-                  ? "1 manuell gesetzter Tag konnte mangels Budget nicht übernommen werden."
-                  : `${result.failedManual} manuell gesetzte Tage konnten mangels Budget nicht übernommen werden.`}
+                  ? t("manual.failedOne")
+                  : t("manual.failedMany", { count: result.failedManual })}
               </p>
             )}
             <div className={`flex flex-wrap gap-x-4 gap-y-1 text-xs ${dark ? "text-slate-300" : "text-slate-600"}`}>
               {[
-                ["bg-emerald-600", "Urlaub"],
-                ["bg-sky-600", "Überstundenabbau"],
-                ["bg-rose-600", "Feiertag"],
-                ["bg-amber-300", "24./31.12. frei"],
-                ["bg-amber-100 border border-amber-300", "24./31.12. halber Tag"],
-                [dark ? "bg-slate-700" : "bg-slate-200", "Wochenende"],
-                [dark ? "bg-slate-800 ring-2 ring-slate-400" : "bg-white ring-2 ring-slate-500", "manuell gesetzt"],
-                ["bg-orange-400", "Schulferien"],
+                ["bg-emerald-600", t("legend.vacation")],
+                ["bg-sky-600", t("legend.overtime")],
+                ["bg-rose-600", t("legend.holiday")],
+                ["bg-amber-300", t("legend.xmasFree")],
+                ["bg-amber-100 border border-amber-300", t("legend.xmasHalf")],
+                [dark ? "bg-slate-700" : "bg-slate-200", t("legend.weekend")],
+                [dark ? "bg-slate-800 ring-2 ring-slate-400" : "bg-white ring-2 ring-slate-500", t("legend.manualSet")],
+                ["bg-orange-400", t("legend.schoolHolidays")],
               ].map(([c, l]) => (
                 <span key={l} className="inline-flex items-center gap-1.5">
                   <span className={`inline-block w-3 h-3 rounded-sm ${c}`} /> {l}
@@ -2007,8 +2008,8 @@ function Urlaubsplaner() {
               ))}
             </div>
             <p className="text-[11px] text-slate-400">
-              Klick setzt Tage, Ziehen wählt mehrere aus, Klick auf geplante Tage öffnet Entfernen/Tauschen.
-              <InfoHint dark={dark} text="Klick auf einen leeren Arbeitstag setzt den oben gewählten Tagestyp – mit der Maus kannst du gedrückt halten und ziehen, um mehrere Tage auf einmal auszuwählen, auch über Wochen- und Monatsgrenzen hinweg; Wochenenden, Feiertage und bereits geplante Tage werden übersprungen. Auf Touch-Geräten setzt du Tage einzeln per Tippen; Wischen scrollt wie gewohnt. Entfernte Tage bleiben Arbeitstage und werden von der Automatik nicht erneut belegt." />
+              {t("manual.helpText")}
+              <InfoHint dark={dark} text={t("manual.helpDetail")} />
             </p>
           </section>
 
@@ -2020,8 +2021,8 @@ function Urlaubsplaner() {
           )}
 
           <p className="text-xs text-slate-400 leading-relaxed">
-            Wunschblöcke zuerst, dann Brückentage streng nach Rendite.
-            <InfoHint dark={dark} text="Mariä Himmelfahrt gilt in Bayern nur in Gemeinden mit überwiegend katholischer Bevölkerung; Fronleichnam gilt in Sachsen und Thüringen nur in einzelnen Regionen und ist hier nicht berücksichtigt. Die Optimierung setzt Wunschblöcke zuerst; der 24.12. und der 31.12. werden bei 100%- oder 50%-Regelung immer fest eingeplant, damit sie die Feiertagsserie nicht unterbrechen. Die automatische Verteilung kauft mit dem Minimalbudget nur isolierte 1-Tages-Brücken (1 Tag → 4 freie Tage); mehr Budget schaltet 2-, 3- und 4-Tages-Lücken frei – verteilt über das Jahr, höchstens eine Lücke je Monat pro Runde. Reine Urlaubswochen ohne Feiertag werden nie automatisch verplant; nicht eingesetzte Tage bleiben als Rest übrig." />
+            {t("footerHint.text")}
+            <InfoHint dark={dark} text={t("footerHint.detail")} />
           </p>
         </div>
           </div>
@@ -2037,8 +2038,10 @@ function Urlaubsplaner() {
             <div>
               <p className="text-sm font-bold">{fmtDate(days[dialogDay])}</p>
               <p className={`text-xs ${dark ? "text-slate-400" : "text-slate-500"}`}>
-                Aktuell: {result.sel[dialogDay] === "vac" ? "Urlaubstag" : "Überstundenabbau"}
-                {days[dialogDay].cost === 0.5 ? " (halber Tag)" : ""}
+                {t("dayDialog.currentLabel", {
+                  type: result.sel[dialogDay] === "vac" ? t("dayDialog.vacationDayType") : t("dayType.overtime"),
+                  half: days[dialogDay].cost === 0.5,
+                })}
               </p>
             </div>
             <div className="space-y-2">
@@ -2046,15 +2049,15 @@ function Urlaubsplaner() {
                 className={`w-full rounded-md px-3 py-2 text-sm font-semibold text-white ${
                   result.sel[dialogDay] === "vac" ? "bg-sky-600 hover:bg-sky-700" : "bg-emerald-600 hover:bg-emerald-700"
                 }`}>
-                In {result.sel[dialogDay] === "vac" ? "Überstundenabbau" : "Urlaubstag"} tauschen
+                {t("dayDialog.swapButton", { target: result.sel[dialogDay] === "vac" ? t("dayType.overtime") : t("dayDialog.vacationDayType") })}
               </button>
               <button onClick={() => applyDialog("remove")}
                 className="w-full rounded-md border border-rose-200 px-3 py-2 text-sm font-semibold text-rose-600 hover:bg-rose-50">
-                Tag entfernen (wieder Arbeitstag)
+                {t("dayDialog.removeButton")}
               </button>
               <button onClick={() => setDialogDay(null)}
                 className={`w-full rounded-md px-3 py-2 text-sm ${dark ? "text-slate-400 hover:bg-slate-800" : "text-slate-500 hover:bg-slate-100"}`}>
-                Abbrechen
+                {t("dayDialog.cancelButton")}
               </button>
             </div>
           </div>
@@ -2064,26 +2067,26 @@ function Urlaubsplaner() {
       {/* Fallback-Dialog: Link manuell kopieren (wenn navigator.share und
           Clipboard-API nicht verfügbar sind) */}
       {copyUrl && (
-        <div role="dialog" aria-modal="true" aria-label="Planung teilen"
+        <div role="dialog" aria-modal="true" aria-label={t("share.modal.title")}
           className={`fixed inset-0 z-[60] flex items-center justify-center p-4 ${dark ? "bg-black/60" : "bg-slate-900/40"}`}
           onClick={() => setCopyUrl(null)}>
           <div className={`w-full max-w-md rounded-xl p-4 shadow-xl space-y-3 ${dark ? "bg-slate-900 border border-slate-700" : "bg-white"}`}
             onClick={(e) => e.stopPropagation()}>
-            <p className="text-sm font-bold">Planung teilen</p>
+            <p className="text-sm font-bold">{t("share.modal.title")}</p>
             <p className={`text-[11px] leading-snug ${dark ? "text-slate-400" : "text-slate-500"}`}>
-              Der Link enthält deine Planungseinstellungen. Jeder mit diesem Link kann die Planung öffnen.
+              {t("share.modal.privacyNote")}
             </p>
-            <label htmlFor="share-url-input" className="sr-only">Teilbarer Link</label>
+            <label htmlFor="share-url-input" className="sr-only">{t("share.modal.linkLabel")}</label>
             <input id="share-url-input" readOnly value={copyUrl}
               onFocus={(e) => e.target.select()} className={inputCls} />
             <div className="flex gap-2">
               <button onClick={copyFromModal}
                 className="flex-1 rounded-md bg-emerald-600 px-3 py-2 text-sm font-semibold text-white hover:bg-emerald-700 focus:outline-none focus:ring-2 focus:ring-emerald-500">
-                Link kopieren
+                {t("share.modal.copyButton")}
               </button>
               <button onClick={() => setCopyUrl(null)}
                 className={`rounded-md px-3 py-2 text-sm ${dark ? "text-slate-400 hover:bg-slate-800" : "text-slate-500 hover:bg-slate-100"}`}>
-                Schließen
+                {t("share.modal.closeButton")}
               </button>
             </div>
           </div>
