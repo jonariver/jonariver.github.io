@@ -734,6 +734,17 @@ function Urlaubsplaner() {
     });
   };
 
+  // Dokumenttitel aus der aktiven Locale setzen (aktuell nur Deutsch; der
+  // statische Titel in index.html dient dabei als initialer Fallback, bevor
+  // dieser Effekt beim ersten Render greift). Rein informativ/technisch –
+  // beeinflusst weder Layout noch Planungslogik. Bei einer späteren
+  // Sprachumschaltung muss hier zusätzlich document.documentElement.lang
+  // aktualisiert werden (siehe CLAUDE.md, Abschnitt „Internationalisierung
+  // und UI-Texte").
+  useEffect(() => {
+    document.title = t("common.documentTitle");
+  }, []);
+
   // Beim Fokussieren eines Zahlenfelds den gesamten Wert markieren,
   // damit der Nutzer direkt lostippen kann statt erst zu löschen
   const selectAllOnFocus = (e) => e.target.select();

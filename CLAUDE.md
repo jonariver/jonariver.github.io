@@ -189,6 +189,20 @@ umzubauen.
   bleiben, z. B. Code-Kommentare, ausschließlich über ein Debug-Flag aktivierte
   `console.log`-Ausgaben, sowie rein technische Metadaten ohne UI-Bezug (z. B.
   das `PRODID`-Feld einer erzeugten `.ics`-Datei).
+- **Technisch notwendige Ausnahme:** Der `<noscript>`-Text in `index.html`
+  („Bitte JavaScript aktivieren, um den Urlaubsplaner zu nutzen.") bleibt
+  bewusst als deutsches String-Literal direkt in `index.html` bestehen. Er
+  wird nur angezeigt, wenn JavaScript deaktiviert ist – in diesem Fall lädt
+  weder `locales/de.js` noch `app.jsx`, sodass `t()` nicht zur Verfügung steht
+  und dieser Text technisch nicht über die Locale-Struktur ausgegeben werden
+  kann. Dasselbe gilt für den statischen `<title>Urlaubsplaner</title>` in
+  `index.html`, der lediglich als Fallback dient, bis `app.jsx` geladen ist
+  (siehe nächster Punkt).
+- Der Browser-/Dokumenttitel wird zusätzlich zur Laufzeit über
+  `document.title = t("common.documentTitle")` (in einem `useEffect` in
+  `app.jsx`) aus der aktiven Locale gesetzt. Der statische Titel in
+  `index.html` bleibt als initialer Fallback bestehen, bis dieser Effekt beim
+  ersten Render greift.
 - Bestehende Übersetzungsschlüssel sollen möglichst weiterverwendet und nicht
   ohne konkreten Grund umbenannt werden.
 - Änderungen an Übersetzungsschlüsseln oder deren Werten dürfen **niemals**
@@ -199,6 +213,11 @@ umzubauen.
 - Deutsch bleibt bis zur ausdrücklichen Einführung weiterer Sprachen die
   einzige aktive Sprache. Eine englische Übersetzung oder ein sichtbarer
   Sprachumschalter dürfen erst nach ausdrücklicher Anweisung ergänzt werden.
+- **Bei einer späteren Sprachumschaltung** (sobald diese ausdrücklich
+  beauftragt wird) muss neben `document.title` auch
+  `document.documentElement.lang` (aktuell statisch `"de"` in `index.html`)
+  passend zur gewählten Sprache aktualisiert werden, damit Screenreader und
+  Browser die Sprache korrekt erkennen.
 - Bei jeder künftigen Änderung an `app.jsx` ist zu prüfen, ob dabei neue
   sichtbare String-Literale außerhalb der Locale-Dateien entstanden sind
   (z. B. per Textsuche nach Umlauten oder typischen deutschen Wörtern in

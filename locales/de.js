@@ -72,6 +72,7 @@
 
     common: {
       moreInfo: "Mehr erfahren",
+      documentTitle: "Urlaubsplaner",
     },
 
     /* ---- Kopfbereich ---- */
