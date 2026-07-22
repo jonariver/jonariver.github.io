@@ -2581,27 +2581,45 @@ function KofiFloatingButton({ planReady, path }) {
   const [autoExpanded, setAutoExpanded] = useState(false);
   const canHoverRef = useRef(false);
   const autoShownRef = useRef(false);
+  const delayTimerRef = useRef(null);
   const hideTimerRef = useRef(null);
+  const pathRef = useRef(path);
 
   useEffect(() => {
     canHoverRef.current = typeof window.matchMedia === "function"
       && window.matchMedia("(hover: hover) and (pointer: fine)").matches;
   }, []);
 
+  // Aktuellen Pfad in einem Ref nachführen, damit der verzögerte Timer beim
+  // Auslösen den Pfad zu diesem Zeitpunkt prüfen kann (nicht den Pfad, der
+  // beim Start der 3 Minuten galt).
+  useEffect(() => { pathRef.current = path; }, [path]);
+
   // Timer beim Unmounten der Seite sauber aufräumen (separat von der
   // Auslöse-Logik, damit ein Cleanup nicht bei jeder Prop-Änderung feuert).
-  useEffect(() => () => { if (hideTimerRef.current) clearTimeout(hideTimerRef.current); }, []);
+  useEffect(() => () => {
+    if (delayTimerRef.current) clearTimeout(delayTimerRef.current);
+    if (hideTimerRef.current) clearTimeout(hideTimerRef.current);
+  }, []);
 
   useEffect(() => {
     if (!planReady || autoShownRef.current) return;
     if (path === "/impressum" || path === "/datenschutz") return;
-    // Auf schmalen Smartphone-Displays wird der automatische Hinweis
-    // unterdrückt, da der längere Hinweistext dort Inhalte verdecken könnte;
-    // Tippen öffnet Ko-fi weiterhin direkt (unverändertes Verhalten).
-    if (typeof window.matchMedia === "function" && !window.matchMedia("(min-width: 640px)").matches) return;
+    // Einmaliger 3-Minuten-Timer nach dem ersten sichtbaren Planungsergebnis;
+    // sofort gesperrt, damit eine erneute Berechnung keinen zweiten Timer
+    // startet.
     autoShownRef.current = true;
-    setAutoExpanded(true);
-    hideTimerRef.current = setTimeout(() => setAutoExpanded(false), 5000);
+    delayTimerRef.current = setTimeout(() => {
+      delayTimerRef.current = null;
+      if (pathRef.current === "/impressum" || pathRef.current === "/datenschutz") return;
+      // Auf schmalen Smartphone-Displays wird der automatische Hinweis
+      // unterdrückt, da der längere Hinweistext dort Inhalte verdecken
+      // könnte; Tippen öffnet Ko-fi weiterhin direkt (unverändertes
+      // Verhalten).
+      if (typeof window.matchMedia === "function" && !window.matchMedia("(min-width: 640px)").matches) return;
+      setAutoExpanded(true);
+      hideTimerRef.current = setTimeout(() => setAutoExpanded(false), 5000);
+    }, 3 * 60 * 1000);
   }, [planReady, path]);
 
   const expanded = interactiveExpanded || autoExpanded;
