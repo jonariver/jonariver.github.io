@@ -15,440 +15,29 @@ const STATE_CODES = Object.keys(STATES);
 const MONTHS = t("months");
 const DOWS = t("weekdaysApiOrder");
 
-// Gauß'sche Osterformel (gregorianisch) -> UTC-Timestamp des Ostersonntags
-function easterUTC(y) {
-  const a = y % 19, b = Math.floor(y / 100), c = y % 100;
-  const d = Math.floor(b / 4), e = b % 4, f = Math.floor((b + 8) / 25);
-  const g = Math.floor((b - f + 1) / 3), h = (19 * a + b - d - g + 15) % 30;
-  const i = Math.floor(c / 4), k = c % 4, l = (32 + 2 * e + 2 * i - h - k) % 7;
-  const m = Math.floor((a + 11 * h + 22 * l) / 451);
-  const month = Math.floor((h + l - 7 * m + 114) / 31);
-  const day = ((h + l - 7 * m + 114) % 31) + 1;
-  return Date.UTC(y, month - 1, day);
-}
-
-const DAY = 86400000;
-
-function holidayMap(year, st) {
-  const H = {}; // key "m-d" (m: 0-basiert)
-  const fix = (m, d, name, states) => {
-    if (!states || states.includes(st)) H[`${m}-${d}`] = name;
-  };
-  const easter = easterUTC(year);
-  const rel = (offset, name, states) => {
-    if (states && !states.includes(st)) return;
-    const dt = new Date(easter + offset * DAY);
-    H[`${dt.getUTCMonth()}-${dt.getUTCDate()}`] = name;
-  };
-
-  fix(0, 1, t("holidays.newYear"));
-  fix(0, 6, t("holidays.epiphany"), ["BW", "BY", "ST"]);
-  fix(2, 8, t("holidays.womensDay"), ["BE", "MV"]);
-  rel(-2, t("holidays.goodFriday"));
-  rel(0, t("holidays.easterSunday"), ["BB"]);
-  rel(1, t("holidays.easterMonday"));
-  fix(4, 1, t("holidays.laborDay"));
-  rel(39, t("holidays.ascensionDay"));
-  rel(49, t("holidays.pentecostSunday"), ["BB"]);
-  rel(50, t("holidays.pentecostMonday"));
-  rel(60, t("holidays.corpusChristi"), ["BW", "BY", "HE", "NW", "RP", "SL"]);
-  fix(7, 15, t("holidays.assumptionDay"), ["SL", "BY"]);
-  fix(8, 20, t("holidays.childrensDay"), ["TH"]);
-  fix(9, 3, t("holidays.germanUnityDay"));
-  fix(9, 31, t("holidays.reformationDay"), ["BB", "HB", "HH", "MV", "NI", "SN", "ST", "SH", "TH"]);
-  fix(10, 1, t("holidays.allSaintsDay"), ["BW", "BY", "NW", "RP", "SL"]);
-  fix(11, 25, t("holidays.christmasDay1"));
-  fix(11, 26, t("holidays.christmasDay2"));
-  if (st === "SN") {
-    // Buß- und Bettag: Mittwoch vor dem 23.11.
-    for (let d = 16; d <= 22; d++) {
-      if (new Date(Date.UTC(year, 10, d)).getUTCDay() === 3) { H[`10-${d}`] = t("holidays.dayOfRepentance"); break; }
-    }
-  }
-  return H;
-}
-
 /* ------------------------------------------------------------------ */
-/* Kalender + Optimierung                                              */
+/* Ausgelagerte Module (kein Modulsystem -> window.FREILOTSE.*-Namespaces, */
+/* siehe js/planning.js, js/calendar.js, js/data-sources.js,                */
+/* js/share-link.js sowie CLAUDE.md, Abschnitt „Architektur/Module").       */
+/* Nur die tatsächlich in app.jsx direkt genutzten Namen werden hier        */
+/* zurückgeholt, um keine unnötigen globalen Bindungen zu erzeugen.         */
 /* ------------------------------------------------------------------ */
-
-function buildDays(year, st, xmasRule, extHolidays) {
-  // Externe Daten (API) haben Vorrang; sonst integrierte Berechnung als Fallback
-  const H = extHolidays || holidayMap(year, st);
-  const days = [];
-  for (let ts = Date.UTC(year, 0, 1); ; ts += DAY) {
-    const dt = new Date(ts);
-    if (dt.getUTCFullYear() !== year) break;
-    const m = dt.getUTCMonth(), d = dt.getUTCDate(), dow = dt.getUTCDay();
-    const holiday = H[`${m}-${d}`] || null;
-    const special = m === 11 && d === 24 ? t("special.christmasEve") : m === 11 && d === 31 ? t("special.newYearsEve") : null;
-    const weekend = dow === 0 || dow === 6;
-    let cost = 1;
-    if (weekend || holiday) cost = 0;
-    else if (special) cost = xmasRule === "0" ? 0 : xmasRule === "50" ? 0.5 : 1;
-    days.push({ i: days.length, m, d, dow, holiday, special, weekend, cost });
-  }
-  return days;
-}
-
-// Wandelt die von der API gelieferten Ferien-Zeiträume in eine Map
-// "m-d" -> { name, start, end } um, begrenzt auf das sichtbare Kalenderjahr.
-// Reine Datenaufbereitung – getrennt von API-Aufruf und Darstellung.
-// Erwartet bereits NORMALISIERTE Zeiträume { start, end, name, source } (siehe
-// normalizeOpenHolidaysPeriod / normalizeSchulferienApiPeriod unten); die Felder
-// start/end sind gültige, parsebare ISO-Datumswerte, "end" ist inklusive.
-function vacationDayMap(periods, year) {
-  const map = {};
-  if (!Array.isArray(periods)) return map;
-  for (const p of periods) {
-    if (!p || !p.start || !p.end) continue; // ungültige Einträge überspringen
-    const s = new Date(p.start), e = new Date(p.end);
-    if (isNaN(s) || isNaN(e) || e < s) continue;
-    // Auf die im Kalender sichtbaren Tage des gewählten Jahres begrenzen
-    // (Ferien über den Jahreswechsel werden so korrekt beschnitten).
-    let ts = Math.max(Date.UTC(year, 0, 1), Date.UTC(s.getUTCFullYear(), s.getUTCMonth(), s.getUTCDate()));
-    const end = Math.min(Date.UTC(year, 11, 31), Date.UTC(e.getUTCFullYear(), e.getUTCMonth(), e.getUTCDate()));
-    for (; ts <= end; ts += DAY) {
-      const dt = new Date(ts);
-      const key = `${dt.getUTCMonth()}-${dt.getUTCDate()}`;
-      if (!map[key]) map[key] = { name: p.name_cp || p.name || t("fallback.schoolHolidays"), start: s, end: e };
-    }
-  }
-  return map;
-}
-
-/* ------------------------------------------------------------------ */
-/* Schulferien: Primärquelle OpenHolidays API, Ersatzquelle            */
-/* schulferien-api.de – beide werden unmittelbar nach dem Abruf auf    */
-/* ein gemeinsames internes Format normalisiert: { start, end, name,   */
-/* source }. "start"/"end" sind gültige ISO-Datumswerte, "end" ist bei */
-/* BEIDEN Quellen inklusive (letzter Ferientag), sodass die bestehende */
-/* vacationDayMap() unverändert bleiben kann. Reine Helfer, keine      */
-/* Komponentenlogik – analog zu holidayMap()/buildDays() oben.         */
-/* ------------------------------------------------------------------ */
-
-// OpenHolidays SchoolHolidays liefert ein JSON-Array direkt (kein Wrapper-
-// Objekt), Felder u. a. startDate/endDate ("YYYY-MM-DD", ohne Uhrzeit -> von
-// JS als UTC-Mitternacht interpretiert, keine Zeitzonenverschiebung) sowie
-// name als Array [{ language, text }]. endDate ist INKLUSIVE: Einträge mit
-// nur einem Ferientag haben startDate === endDate (z. B. „Buß- und Bettag“),
-// was bei einem exklusiven Enddatum nicht möglich wäre.
-function normalizeOpenHolidaysPeriod(e) {
-  if (!e || typeof e !== "object") return null;
-  const start = typeof e.startDate === "string" ? e.startDate : null;
-  const end = typeof e.endDate === "string" ? e.endDate : null;
-  if (!start || !end) return null;
-  const sd = new Date(start), ed = new Date(end);
-  if (isNaN(sd) || isNaN(ed) || ed < sd) return null; // ungültigen Zeitraum verwerfen
-  let name = null;
-  if (Array.isArray(e.name)) {
-    const de = e.name.find((n) => n && n.language === "DE" && typeof n.text === "string");
-    const first = e.name.find((n) => n && typeof n.text === "string");
-    name = (de || first || {}).text || null;
-  }
-  return { start, end, name, source: "openholidays" };
-}
-
-// schulferien-api.de (v1) liefert ein JSON-Array mit Feldern start/end
-// (ISO-Zeitstempel inkl. "Z", z. B. "2029-07-30T00:00Z" / "...T23:59Z" –
-// das Enddatum bezeichnet seit der v1-Datenkorrektur den tatsächlichen
-// letzten Ferientag, also ebenfalls INKLUSIVE) sowie name/name_cp.
-function normalizeSchulferienApiPeriod(e) {
-  if (!e || typeof e !== "object") return null;
-  const start = typeof e.start === "string" ? e.start : null;
-  const end = typeof e.end === "string" ? e.end : null;
-  if (!start || !end) return null;
-  const sd = new Date(start), ed = new Date(end);
-  if (isNaN(sd) || isNaN(ed) || ed < sd) return null;
-  const name = (typeof e.name_cp === "string" && e.name_cp) || (typeof e.name === "string" && e.name) || null;
-  return { start, end, name, source: "schulferien-api" };
-}
-
-function fetchOpenHolidaysResponse(year, st) {
-  // Interne Bundeslandcodes (z. B. "BY") bleiben unverändert; nur für diese
-  // eine Anfrage wird daraus der OpenHolidays-Subdivision-Code "DE-BY".
-  const url = `https://openholidaysapi.org/SchoolHolidays?countryIsoCode=DE&subdivisionCode=DE-${st}&languageIsoCode=DE&validFrom=${year}-01-01&validTo=${year}-12-31`;
-  return fetch(url);
-}
-function fetchSchulferienApiResponse(year, st) {
-  return fetch(`https://schulferien-api.de/api/v1/${year}/${st}/`);
-}
-
-// Fragt eine einzelne Quelle ab und unterscheidet dabei klar zwischen
-// "technisch nicht erreichbar" (Netzwerkfehler oder HTTP-Fehlerstatus) und
-// "erreichbar, aber ohne verwertbare Daten" (Antwort kam an, war jedoch kein
-// gültiges Array, enthielt nur ungültige Einträge oder schlicht keine Ferien
-// für Jahr+Bundesland). Wirft nie – Fehler werden immer als Ergebnis codiert,
-// damit ein Ausfall nie zum Absturz führt.
-async function trySchoolHolidaySource(requestFn, normalizeFn) {
-  let response;
-  try {
-    response = await requestFn();
-  } catch (e) {
-    return { reachable: false, periods: [] }; // Netzwerkfehler o. Ä.
-  }
-  if (!response || !response.ok) return { reachable: false, periods: [] }; // HTTP-Fehler
-  let json;
-  try {
-    json = await response.json();
-  } catch (e) {
-    return { reachable: true, periods: [] }; // Antwort kam an, kein gültiges JSON
-  }
-  if (!Array.isArray(json)) return { reachable: true, periods: [] }; // kein gültiges Array
-  const periods = json.map(normalizeFn).filter(Boolean); // ungültige Einträge verwerfen
-  return { reachable: true, periods };
-}
-
-// Orchestriert Primär- und Ersatzquelle gemäß der geforderten Strategie:
-// 1) OpenHolidays versuchen; liefert es Daten, werden diese verwendet.
-// 2) Sonst (nicht erreichbar, HTTP-Fehler, kein Array, nur ungültige
-//    Einträge oder schlicht keine Ferien) schulferien-api.de versuchen.
-// 3) Liefert auch die Ersatzquelle nichts: "keine" (mind. eine Quelle war
-//    erreichbar) oder "fehler" (beide technisch nicht erreichbar).
-async function loadSchoolHolidays(year, st) {
-  const primary = await trySchoolHolidaySource(() => fetchOpenHolidaysResponse(year, st), normalizeOpenHolidaysPeriod);
-  if (primary.periods.length > 0) return { status: "openholidays", periods: primary.periods };
-
-  const fallback = await trySchoolHolidaySource(() => fetchSchulferienApiResponse(year, st), normalizeSchulferienApiPeriod);
-  if (fallback.periods.length > 0) return { status: "ersatz", periods: fallback.periods };
-
-  if (primary.reachable || fallback.reachable) return { status: "keine", periods: [] };
-  return { status: "fehler", periods: [] };
-}
-
-// Minimalbudget: Summe der Kosten aller isolierten Lücken mit Kosten <= 1 Tag.
-// Das sind die klassischen Brückentage mit maximalem Hebel:
-// 1 investierter Tag erzeugt i. d. R. 4 zusammenhängende freie Tage.
-function minimalBridgeBudget(days, fromMonth = 0) {
-  const n = days.length;
-  let sum = 0, j = 0;
-  while (j < n) {
-    if (days[j].cost === 0) { j++; continue; }
-    const s = j;
-    let c = 0;
-    while (j < n && days[j].cost > 0) { c += days[j].cost; j++; }
-    if (c > 0 && c <= 1 && s > 0 && j < n && days[s].m >= fromMonth) sum += c; // beidseitig flankiert, ab Wunschmonat
-  }
-  return sum;
-}
-
-function plan(days, cfg) {
-  const n = days.length;
-  const sel = new Array(n).fill(null); // 'vac' | 'ot'
-  const origin = new Array(n).fill(null); // 'manual' | 'block' | 'auto'
-  const budget = { vac: cfg.vac, ot: cfg.ot };
-  // Budget, das die automatische Verteilung (Phase 2) maximal einsetzen darf.
-  // Wunschblöcke (Phase 1) nutzen weiterhin das volle Budget.
-  const auto = { vac: cfg.autoVac ?? Infinity, ot: cfg.autoOt ?? Infinity };
-  // Manuelle Eingriffe des Nutzers per Klick im Kalender
-  const ovr = cfg.overrides || {};
-  const blocked = new Array(n).fill(false); // vom Nutzer entfernte Tage bleiben Arbeitstage
-  const holidayPref = cfg.schoolHolidayPreference || "neutral"; // prefer | avoid | neutral
-  const vacSet = cfg.vacationDays || {}; // m-d -> true, nur fuer die Sortierung genutzt
-  const free = (j) => days[j].cost === 0 || sel[j] !== null;
-
-  const spend = (j, preferOt, otCapRef) => {
-    if (blocked[j]) return false;
-    const c = days[j].cost;
-    const canOt = otCapRef ? otCapRef.left >= c && budget.ot >= c : budget.ot >= c;
-    if (preferOt && canOt) {
-      sel[j] = "ot"; budget.ot -= c; if (otCapRef) otCapRef.left -= c; return true;
-    }
-    if (budget.vac >= c) { sel[j] = "vac"; budget.vac -= c; return true; }
-    if (budget.ot >= c) { sel[j] = "ot"; budget.ot -= c; return true; }
-    return false;
-  };
-
-  /* --- Phase 0: manuelle Klicks des Nutzers (höchste Priorität) ---
-     "vac"/"ot": fest gesetzter Urlaubs- bzw. Überstundentag.
-     "none": Tag wurde entfernt und bleibt Arbeitstag – keine Phase darf ihn belegen. */
-  let failedManual = 0;
-  for (let j = 0; j < n; j++) {
-    const o = ovr[`${days[j].m}-${days[j].d}`];
-    if (!o || days[j].cost === 0) continue;
-    if (o === "none") { blocked[j] = true; continue; }
-    const c = days[j].cost;
-    if (o === "vac" && budget.vac >= c - 1e-9) { sel[j] = "vac"; budget.vac -= c; origin[j] = "manual"; }
-    else if (o === "ot" && budget.ot >= c - 1e-9) { sel[j] = "ot"; budget.ot -= c; origin[j] = "manual"; }
-    else failedManual++;
-  }
-
-  /* --- Phase 1: Wunschblöcke (priorisiert) --- */
-  const blockResults = [];
-  for (const b of cfg.blocks) {
-    const len = Math.max(1, Math.floor(b.len || 0));
-    if (!b.len) { blockResults.push({ b, placed: false }); continue; }
-    let best = null;
-    for (let s = 0; s + len <= n; s++) {
-      if (b.month !== null && days[s].m !== b.month) continue;
-      let c = 0, hasBlocked = false;
-      for (let j = s; j < s + len; j++) if (!free(j)) { c += days[j].cost; if (blocked[j]) hasBlocked = true; }
-      if (hasBlocked || c > budget.vac + budget.ot + 1e-9) continue;
-      let ext = 0, k = s - 1;
-      while (k >= 0 && free(k)) { ext++; k--; }
-      k = s + len;
-      while (k < n && free(k)) { ext++; k++; }
-      if (!best || c < best.c - 1e-9 || (Math.abs(c - best.c) < 1e-9 && ext > best.ext)) best = { s, c, ext };
-    }
-    if (best) {
-      const otCapRef = { left: b.ot ?? 0 };
-      for (let j = best.s; j < best.s + len; j++) if (!free(j) && spend(j, true, otCapRef)) origin[j] = "block";
-      blockResults.push({ b, placed: true, start: best.s, end: best.s + len - 1, cost: best.c });
-    } else {
-      blockResults.push({ b, placed: false });
-    }
-  }
-
-  /* --- Phase 1b: 24.12. und 31.12. immer freinehmen, wenn sie etwas kosten ---
-     Bei 100%- oder 50%-Regelung würden diese Tage sonst die Weihnachts- bzw.
-     Silvester-Serie unterbrechen. Sie werden daher fest eingeplant (unabhängig
-     vom Budget der automatischen Verteilung), Reihenfolge gemäß spendFirst.
-     Bei 0%-Regelung oder am Wochenende sind sie ohnehin frei. */
-  for (let j = 0; j < n; j++) {
-    if (days[j].special && !free(j) && !blocked[j]) {
-      const c = days[j].cost;
-      const tryVac = () => {
-        if (budget.vac >= c - 1e-9) { sel[j] = "vac"; budget.vac -= c; origin[j] = "auto"; return true; }
-        return false;
-      };
-      const tryOt = () => {
-        if (budget.ot >= c - 1e-9) { sel[j] = "ot"; budget.ot -= c; origin[j] = "auto"; return true; }
-        return false;
-      };
-      if (cfg.spendFirst === "ot") { tryOt() || tryVac(); } else { tryVac() || tryOt(); }
-    }
-  }
-
-  /* --- Phase 2: Brückentage nach strengem ROI-Prinzip ---
-     Die Automatik kauft Lücken stufenweise nach Rendite:
-     Stufe 1 sind ausschließlich isolierte 1-Tages-Lücken (1 Tag -> ~4 freie
-     Tage). Erst wenn keine 1-Tages-Lücke mehr existiert UND noch Auto-Budget
-     übrig ist, kommen 2-, 3- und zuletzt 4-Tages-Lücken infrage. Reine
-     Urlaubswochen ohne Feiertag werden nie automatisch verplant.
-     Innerhalb einer Stufe gilt: beste Effizienz zuerst, pro Runde höchstens
-     eine Lücke je Monat (Verteilung übers Jahr). Nicht lohnender Einsatz
-     unterbleibt; Restbudget bleibt übrig. */
-  const MIN_EFF = 2;
-  const MAX_GAP_COST = 4;
-  const FLANK_CAP = 4; // angrenzende freie Tage gedeckelt zählen, damit eine
-  // bereits lange Serie nicht immer weitere Käufe rechtfertigt
-  const autoFrom = cfg.autoFromMonth ?? 0; // Automatik plant nur Lücken ab diesem Monat
-  const spendAuto = (j) => {
-    if (blocked[j]) return false;
-    const c = days[j].cost;
-    const tryVac = () => {
-      if (auto.vac >= c - 1e-9 && budget.vac >= c - 1e-9) {
-        sel[j] = "vac"; budget.vac -= c; auto.vac -= c; origin[j] = "auto"; return true;
-      }
-      return false;
-    };
-    const tryOt = () => {
-      if (auto.ot >= c - 1e-9 && budget.ot >= c - 1e-9) {
-        sel[j] = "ot"; budget.ot -= c; auto.ot -= c; origin[j] = "auto"; return true;
-      }
-      return false;
-    };
-    // Reihenfolge wählbar: erst Urlaub oder erst Überstundenabbau aufbrauchen
-    return cfg.spendFirst === "ot" ? tryOt() || tryVac() : tryVac() || tryOt();
-  };
-  let guard = 0;
-  let usedMonths = new Set();
-  while (guard++ < 400) {
-    const pool = Math.min(auto.vac, budget.vac) + Math.min(auto.ot, budget.ot);
-    if (pool < 0.5 - 1e-9) break;
-    // Lücken (zusammenhängende Arbeitstage zwischen freien Tagen) sammeln
-    const gaps = [];
-    let j = 0;
-    while (j < n) {
-      if (free(j)) { j++; continue; }
-      const s = j;
-      let c = 0, hasBlocked = false;
-      while (j < n && !free(j)) { c += days[j].cost; if (blocked[j]) hasBlocked = true; j++; }
-      const e = j - 1;
-      if (!hasBlocked && c > 0 && c <= MAX_GAP_COST && c <= pool + 1e-9 && days[s].m >= autoFrom) {
-        let before = 0, k = s - 1;
-        while (k >= 0 && free(k)) { before++; k--; }
-        let after = 0; k = e + 1;
-        while (k < n && free(k)) { after++; k++; }
-        if (before > 0 && after > 0) {
-          const eff = (Math.min(before, FLANK_CAP) + (e - s + 1) + Math.min(after, FLANK_CAP)) / c;
-          if (eff >= MIN_EFF - 1e-9) gaps.push({ s, e, c, eff, month: days[s].m });
-        }
-      }
-    }
-    if (gaps.length === 0) break;
-    // ROI-Stufe: nur die Lücken mit den geringsten Kosten kommen infrage
-    const minTier = Math.min(...gaps.map((g) => Math.ceil(g.c - 1e-9)));
-    // Anteil der Ferientage einer Lücke (0..1). Bei "neutral" ist der Ferienwert
-    // per Definition exakt 0 (share wird gar nicht erst berechnet).
-    const vacShare = (g) => {
-      if (holidayPref === "neutral") return 0;
-      let hit = 0, tot = 0;
-      for (let k = g.s; k <= g.e; k++) { tot++; if (vacSet[`${days[k].m}-${days[k].d}`]) hit++; }
-      return tot ? hit / tot : 0;
-    };
-    // Additives Scoring: Der Ferienwert fließt als eigener Summand in die
-    // Bewertung ein und kann so – anders als ein reiner Tie-Breaker – die
-    // Auswahl zwischen ähnlich effizienten Lücken tatsächlich kippen.
-    // prefer und avoid nutzen exakt spiegelbildliche Gewichte (+W · share
-    // gegenüber −W · share); bei "neutral" ist der Zusatzterm 0.
-    const HOLIDAY_WEIGHT = 1.2;
-    const holidayScore = (g) => {
-      if (holidayPref === "neutral") return 0;
-      const signed = holidayPref === "prefer" ? vacShare(g) : -vacShare(g);
-      return HOLIDAY_WEIGHT * signed;
-    };
-    const score = (g) => g.eff + holidayScore(g);
-    const tier = gaps
-      .filter((g) => Math.ceil(g.c - 1e-9) === minTier)
-      // Primärkriterium ist der Gesamtscore (Effizienz + Ferienwert), erst
-      // danach reine Effizienz und Position als Tie-Breaker.
-      .sort((a, b) => score(b) - score(a) || b.eff - a.eff || a.s - b.s);
-
-    // Vorübergehende Debug-Ausgabe je betrachteter Lücke (nur bei aktiver
-    // Präferenz), zeigt Ferienüberschneidung, Feriengewichtung und Gesamtscore.
-    if (cfg.debugHolidayScoring && holidayPref !== "neutral") {
-      for (const g of tier) {
-        const share = vacShare(g);
-        console.log(
-          `[Ferien-Debug] ${holidayPref} Lücke Tag ${g.s}-${g.e} (Monat ${g.month + 1})` +
-          ` | Kosten ${g.c.toFixed(1)} | eff ${g.eff.toFixed(2)}` +
-          ` | Ferienanteil ${(share * 100).toFixed(0)}% | Feriengewicht ${holidayScore(g).toFixed(2)}` +
-          ` | Gesamtscore ${score(g).toFixed(2)}`
-        );
-      }
-    }
-    let pick = tier.find((g) => !usedMonths.has(g.month));
-    if (!pick) { usedMonths = new Set(); pick = tier[0]; } // neue Verteilrunde
-    usedMonths.add(pick.month);
-    let spent = false;
-    for (let k = pick.s; k <= pick.e; k++) if (!free(k)) spent = spendAuto(k) || spent;
-    if (!spent) break; // Budget lässt sich nicht mehr einsetzen (z. B. gesplittet)
-  }
-
-  /* --- Auswertung: freie Perioden mit Herkunft der eingesetzten Tage --- */
-  const periods = [];
-  let j2 = 0;
-  while (j2 < n) {
-    if (!free(j2)) { j2++; continue; }
-    const s = j2;
-    let vacC = 0, otC = 0, hasSel = false;
-    const orig = new Set();
-    while (j2 < n && free(j2)) {
-      if (sel[j2] === "vac") { vacC += days[j2].cost; hasSel = true; }
-      if (sel[j2] === "ot") { otC += days[j2].cost; hasSel = true; }
-      if (origin[j2]) orig.add(origin[j2]);
-      j2++;
-    }
-    const e = j2 - 1;
-    // Platzierte Wunschblöcke zählen auch dann, wenn sie keinen Tag gekostet haben
-    for (const r of blockResults) if (r.placed && r.start >= s && r.end <= e) orig.add("block");
-    if (hasSel || orig.has("block")) {
-      periods.push({ s, e, len: e - s + 1, vac: vacC, ot: otC, origins: [...orig] });
-    }
-  }
-  return { sel, budget, periods, blockResults, failedManual };
-}
+const { plan, minimalBridgeBudget } = window.FREILOTSE.planning;
+const { DAY, buildDays, vacationDayMap } = window.FREILOTSE.calendar;
+const { loadPublicHolidays, loadSchoolHolidays } = window.FREILOTSE.dataSources;
+const {
+  SHARE_MAX_URL, SHARE_MAX_DECODED, HAS_COMPRESSION,
+  buildSharePayload, encodePlain, validateSharePayload, decodeShare,
+  readShareFragment, deflateToB64url, inflateFromB64url,
+} = window.FREILOTSE.shareLink;
+// jsx/common-components.jsx, jsx/kofi-components.jsx, jsx/landing-page.jsx
+// und jsx/legal-pages.jsx müssen vor app.jsx geladen sein (siehe index.html).
+const {
+  CollapsibleCard, InfoHint,
+  SiteFooter, KofiFloatingButton,
+  LandingPage,
+  ImpressumPage, DatenschutzPage,
+} = window.FREILOTSE.ui;
 
 /* ------------------------------------------------------------------ */
 /* Hilfen fürs Rendering                                               */
@@ -483,520 +72,49 @@ function dayClass(day, selType, showWeekendHolidays, dark) {
   }
   if (day.special && day.cost === 0 && !day.weekend) return dark ? "bg-amber-400 text-amber-950" : "bg-amber-300 text-amber-900";
   if (day.special && day.cost === 0.5) return dark ? "bg-amber-900/70 text-amber-300" : "bg-amber-100 text-amber-800";
+  // Echtes Kalenderwochenende behält bewusst IMMER das bestehende Wochenend-
+  // Styling, auch wenn Samstag/Sonntag laut individueller Arbeitswoche
+  // tatsächlich ein persönlicher Arbeitstag ist (z. B. Di–Sa) – die konkrete
+  // Belegung/Kosten sind dann trotzdem über selType (grün/blau) bzw. den
+  // Tooltip (dayTitle) erkennbar.
   if (day.weekend) return dark ? "bg-slate-800 text-slate-600" : "bg-slate-200 text-slate-400";
+  // Persönlicher regulärer freier Werktag (kein echtes Wochenende, aber laut
+  // workingWeekdays trotzdem arbeitsfrei) – eigenes, aber verwandtes Styling
+  // (gleiche gedämpfte Farbfamilie wie Wochenende, gestrichelter Rahmen zur
+  // Unterscheidung), siehe Legende "Regelmäßig frei".
+  if (!day.isWorkingDay) {
+    return dark
+      ? "bg-slate-800/60 text-slate-500 border border-dashed border-slate-700"
+      : "bg-slate-100 text-slate-400 border border-dashed border-slate-300";
+  }
   return dark ? "bg-slate-800 text-slate-200 border border-slate-600" : "bg-white text-slate-700 border border-slate-200";
 }
 
-function dayTitle(day, selType) {
+// Mariä Himmelfahrt (15.8.) ist in Bayern gesetzlich nur in Gemeinden mit
+// überwiegend katholischer Bevölkerung ein Feiertag, nicht landesweit – anders
+// als bei allen übrigen Feiertagen kann das weder die lokale Berechnung noch
+// (mangels Gemeinde-Granularität) eine externe Feiertags-API abbilden. Die
+// Erkennung erfolgt bewusst über Datum + Bundesland statt über den
+// Feiertagsnamen-String, damit sie unabhängig von der exakten Schreibweise der
+// jeweils aktiven Quelle (lokale Berechnung oder externe API) funktioniert.
+const isBavarianPartialAssumptionDay = (day, st) => st === "BY" && day.m === 7 && day.d === 15 && !!day.holiday;
+const withAssumptionDayCaveat = (name, day, st) =>
+  isBavarianPartialAssumptionDay(day, st) ? `${name} ${t("holidayCaveats.assumptionDayInline")}` : name;
+
+function dayTitle(day, selType, st) {
   const parts = [fmtDate(day)];
-  if (day.holiday) parts.push(day.holiday);
+  if (day.holiday) parts.push(withAssumptionDayCaveat(day.holiday, day, st));
   if (day.special) parts.push(day.special);
+  // Nur dort ergänzen, wo die reine Zellfarbe allein nicht eindeutig wäre:
+  // ein echtes Wochenende behält sein Styling auch als persönlicher Arbeitstag
+  // (siehe dayClass), daher hier explizit klarstellen; ein regelmäßig freier
+  // Werktag hat bereits eine eigene, unterscheidbare Zellfarbe (siehe dayClass/
+  // Legende "Regelmäßig frei") – der Tooltip ergänzt es trotzdem knapp.
+  if (day.weekend && day.isWorkingDay) parts.push(t("calendar.personalWorkday"));
+  else if (!day.weekend && !day.isWorkingDay) parts.push(t("legend.regularlyOff"));
   if (selType === "vac") parts.push(t("dayType.vacation"));
   if (selType === "ot") parts.push(t("dayType.overtime"));
   return parts.join(" · ");
-}
-
-/* ------------------------------------------------------------------ */
-/* Wiederverwendbare UI-Bausteine                                      */
-/* ------------------------------------------------------------------ */
-
-/* Einklappbare Karte (Accordion) im Stil des Einfachmodus.
-   Sanfte Height- und Fade-Animation über den CSS-Grid-Trick (0fr -> 1fr). */
-function CollapsibleCard({ icon, title, open, onToggle, dark, cardCls, children }) {
-  return (
-    <section className={`${cardCls} overflow-hidden`}>
-      <button type="button" onClick={onToggle}
-        className="w-full flex items-center justify-between px-4 py-3 text-left">
-        <span className="text-sm font-bold flex items-center gap-2">
-          <span aria-hidden="true">{icon}</span> {title}
-        </span>
-        <span className={`text-[10px] transition-transform duration-300 ${open ? "rotate-90" : ""} ${dark ? "text-slate-400" : "text-slate-500"}`}>
-          ▶
-        </span>
-      </button>
-      <div className="grid transition-all duration-300 ease-in-out"
-        style={{ gridTemplateRows: open ? "1fr" : "0fr", opacity: open ? 1 : 0 }}>
-        <div className="overflow-hidden">
-          <div className="px-4 pb-4 space-y-4">{children}</div>
-        </div>
-      </div>
-    </section>
-  );
-}
-
-/* Kleines Info-Icon: die ausführliche Erklärung erscheint erst auf Klick */
-function InfoHint({ text, dark }) {
-  const [show, setShow] = useState(false);
-  return (
-    <span className="inline">
-      <button type="button" onClick={() => setShow(!show)} title={t("common.moreInfo")}
-        className={`ml-1 inline-flex h-4 w-4 items-center justify-center rounded-full border text-[10px] font-bold align-middle ${
-          dark ? "border-slate-600 text-slate-400 hover:bg-slate-800" : "border-slate-300 text-slate-500 hover:bg-slate-100"
-        }`}>
-        i
-      </button>
-      {show && (
-        <span className={`mt-1 block text-[11px] leading-snug ${dark ? "text-slate-400" : "text-slate-500"}`}>{text}</span>
-      )}
-    </span>
-  );
-}
-
-/* ------------------------------------------------------------------ */
-/* Teilen: versionierter Share-Link im URL-Fragment                    */
-/* ------------------------------------------------------------------ */
-/* Es werden ausschließlich EINGABEN gespeichert. Der Plan (auto. Tage,
-   Farben, Legende, Tooltips, Kontingente) wird beim Laden deterministisch
-   über plan(days,cfg) neu berechnet. Feiertage und Schulferien werden aus
-   Jahr + Bundesland erneut geladen und daher NICHT im Link abgelegt.
-
-   Format:
-   - Neu:    #p=<base64url(deflate(JSON))>   – kompakt, via CompressionStream
-   - Alt:    #plan=<base64url(JSON)>         – unverändert lesbar (Abwärtskompat.)
-   Ist CompressionStream/DecompressionStream nicht verfügbar, wird beim
-   Erstellen automatisch das alte #plan=-Verfahren genutzt. */
-
-const SHARE_VERSION = 1;
-const SHARE_MAX_URL = 8000;        // praktische URL-Obergrenze
-const SHARE_MAX_DECODED = 100000;  // Schutz vor übermäßig großen (auch dekomprimierten) Payloads
-const SHARE_MAX_OVERRIDES = 400;   // Obergrenze manueller Tage
-const SHARE_MAX_BLOCKS = 20;
-
-const XMAS_RULES = ["0", "50", "100"];
-const UI_MODES = ["einfach", "profi"];
-const SIMPLE_GOALS = ["free", "blocks", "short"];
-const SCHOOL_PREFS = ["prefer", "avoid", "neutral"];
-const SPEND_FIRST = ["vac", "ot"];
-
-// Kompression nur nutzen, wenn beide Stream-APIs vorhanden sind
-// (Chrome/Edge ≥80, Firefox ≥113, Safari ≥16.4 – Desktop und Mobil).
-const HAS_COMPRESSION =
-  typeof CompressionStream !== "undefined" && typeof DecompressionStream !== "undefined";
-
-// Bytes <-> base64url. TextEncoder/Decoder sorgen für korrekte Unicode-Behandlung.
-function bytesToB64url(bytes) {
-  let bin = "";
-  for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
-  return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
-}
-function b64urlToBytes(s) {
-  const pad = s.length % 4 === 0 ? "" : "=".repeat(4 - (s.length % 4));
-  const bin = atob(s.replace(/-/g, "+").replace(/_/g, "/") + pad);
-  const out = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
-  return out;
-}
-
-// JSON-String -> deflate -> base64url. Asynchron (Stream-API).
-// Über Blob().stream().pipeThrough() geführt: eine einzige awaitbare Rejection,
-// keine hängenden Writer-Promises (die bei kaputten Daten sonst als
-// unhandledRejection auftauchen würden).
-async function deflateToB64url(str) {
-  const stream = new Blob([new TextEncoder().encode(str)]).stream()
-    .pipeThrough(new CompressionStream("deflate"));
-  const buf = await new Response(stream).arrayBuffer();
-  return bytesToB64url(new Uint8Array(buf));
-}
-// base64url(deflate) -> inflate -> JSON-String. Asynchron (Stream-API).
-// Wirft bei beschädigten Daten – der Aufrufer fängt das ab und meldet den Link
-// als nicht lesbar.
-async function inflateFromB64url(b64) {
-  const stream = new Blob([b64urlToBytes(b64)]).stream()
-    .pipeThrough(new DecompressionStream("deflate"));
-  const buf = await new Response(stream).arrayBuffer();
-  return new TextDecoder().decode(buf);
-}
-
-// "m-d" (m 0-basiert) prüfen – inkl. echter Kalenderprüfung fürs Jahr,
-// damit z. B. der 30.02. oder ungültige Werte zuverlässig abgewiesen werden.
-function isValidMd(md, year) {
-  if (typeof md !== "string") return false;
-  const p = md.split("-");
-  if (p.length !== 2) return false;
-  const m = parseInt(p[0], 10), d = parseInt(p[1], 10);
-  if (!Number.isInteger(m) || !Number.isInteger(d) || m < 0 || m > 11 || d < 1 || d > 31) return false;
-  const dt = new Date(Date.UTC(year, m, d));
-  return dt.getUTCFullYear() === year && dt.getUTCMonth() === m && dt.getUTCDate() === d;
-}
-
-// Baut das kompakte, versionierte Share-Objekt aus einem Zustands-Snapshot.
-// overridesMd: Map "m-d" -> "vac"|"ot"|"none" (nur das geteilte Jahr).
-function buildSharePayload(s) {
-  const ov = { v: [], o: [], n: [] };
-  for (const [md, val] of Object.entries(s.overridesMd || {})) {
-    if (val === "vac") ov.v.push(md);
-    else if (val === "ot") ov.o.push(md);
-    else if (val === "none") ov.n.push(md);
-  }
-  const blocks = (s.blocks || []).slice(0, SHARE_MAX_BLOCKS).map((b) => [
-    String(b.len ?? ""), String(b.month ?? ""), String(b.ot ?? ""),
-  ]);
-  return {
-    version: SHARE_VERSION,
-    state: {
-      y: s.year, st: s.st, vac: s.vac, ot: s.ot, x: s.xmasRule,
-      m: s.uiMode, g: s.simpleGoal, ss: s.simpleStarted ? 1 : 0,
-      sh: s.schoolHolidayPreference, av: s.autoVac, ao: s.autoOt,
-      sf: s.spendFirst, af: s.autoFrom, wh: s.showWeekendHolidays ? 1 : 0,
-      b: blocks, ov,
-    },
-  };
-}
-
-// JSON-Payload -> base64url (unkomprimiert, für das alte #plan=-Format).
-function encodePlain(payload) {
-  return bytesToB64url(new TextEncoder().encode(JSON.stringify(payload)));
-}
-
-// Validiert einen bereits dekodierten JSON-String (gilt für beide Formate:
-// #plan= liefert ihn synchron über atob, #p= asynchron über inflate).
-// Rückgabe:
-//   { state, warning }  – ladbar (warning=true: Teile korrigiert/verworfen)
-//   null                – nicht ladbar (kaputt / falsche Version / zu groß)
-function validateSharePayload(jsonStr) {
-  if (typeof jsonStr !== "string" || jsonStr.length > SHARE_MAX_DECODED) return null;
-  let payload;
-  try { payload = JSON.parse(jsonStr); } catch (e) { return null; }
-  if (!payload || typeof payload !== "object") return null;
-  if (payload.version !== SHARE_VERSION) return null; // unbekannte/veraltete Version
-  const raw = payload.state;
-  if (!raw || typeof raw !== "object") return null;
-
-  let warn = false;
-  const out = {
-    year: new Date().getFullYear(), st: "BY", vac: 30, ot: 0, xmasRule: "50",
-    uiMode: "einfach", simpleGoal: "free", simpleStarted: false,
-    schoolHolidayPreference: "neutral", autoVac: "", autoOt: "0",
-    spendFirst: "vac", autoFrom: 0, showWeekendHolidays: true, blocks: [], overridesMd: {},
-  };
-  const bad = (present) => { if (present) warn = true; };
-
-  const y = parseInt(raw.y, 10);
-  if (Number.isInteger(y) && y >= 1970 && y <= 2100) out.year = y; else bad(raw.y !== undefined);
-  if (typeof raw.st === "string" && Object.prototype.hasOwnProperty.call(STATES, raw.st)) out.st = raw.st; else bad(raw.st !== undefined);
-  const vac = Number(raw.vac); if (Number.isFinite(vac) && vac >= 0 && vac <= 366) out.vac = vac; else bad(raw.vac !== undefined);
-  const ot = Number(raw.ot); if (Number.isFinite(ot) && ot >= 0 && ot <= 366) out.ot = ot; else bad(raw.ot !== undefined);
-  if (XMAS_RULES.includes(raw.x)) out.xmasRule = raw.x; else bad(raw.x !== undefined);
-  if (UI_MODES.includes(raw.m)) out.uiMode = raw.m; else bad(raw.m !== undefined);
-  if (SIMPLE_GOALS.includes(raw.g)) out.simpleGoal = raw.g; else bad(raw.g !== undefined);
-  if (SCHOOL_PREFS.includes(raw.sh)) out.schoolHolidayPreference = raw.sh; else bad(raw.sh !== undefined);
-  if (SPEND_FIRST.includes(raw.sf)) out.spendFirst = raw.sf; else bad(raw.sf !== undefined);
-  out.simpleStarted = raw.ss === 1 || raw.ss === true;
-  out.showWeekendHolidays = raw.wh === undefined ? true : (raw.wh === 1 || raw.wh === true);
-  const af = parseInt(raw.af, 10); if (Number.isInteger(af) && af >= 0 && af <= 11) out.autoFrom = af; else bad(raw.af !== undefined);
-  out.autoVac = raw.av === "" ? "" : (Number.isFinite(Number(raw.av)) && raw.av != null ? String(raw.av) : "");
-  out.autoOt = Number.isFinite(Number(raw.ao)) && raw.ao != null ? String(raw.ao) : "0";
-
-  if (Array.isArray(raw.b)) {
-    if (raw.b.length > SHARE_MAX_BLOCKS) warn = true;
-    out.blocks = raw.b.slice(0, SHARE_MAX_BLOCKS).map((t) => {
-      const a = Array.isArray(t) ? t : [];
-      const len = Number(a[0]);
-      const mo = a[1], otv = a[2];
-      return {
-        len: Number.isFinite(len) && len >= 1 ? len : 9,
-        month: mo === "" || mo == null ? "" : (Number.isInteger(parseInt(mo, 10)) ? String(parseInt(mo, 10)) : ""),
-        ot: otv === "" || otv == null ? "" : String(Number(otv) || 0),
-      };
-    });
-  } else bad(raw.b !== undefined);
-
-  // Overrides einlesen + Konflikte erkennen: taucht ein Datum in mehreren
-  // Kategorien auf, wird es NICHT stillschweigend übernommen, sondern
-  // vollständig verworfen und als Hinweis markiert. Doppelte Datumswerte
-  // innerhalb einer Kategorie werden dedupliziert.
-  const ovIn = raw.ov && typeof raw.ov === "object" ? raw.ov : {};
-  const seen = {}; // md -> "vac"|"ot"|"none"|"CONFLICT"
-  const readList = (list, type) => {
-    if (list === undefined) return;
-    if (!Array.isArray(list)) { warn = true; return; }
-    for (const md of list) {
-      if (!isValidMd(md, out.year)) { warn = true; continue; }
-      if (seen[md] === undefined) seen[md] = type;
-      else if (seen[md] !== type) { seen[md] = "CONFLICT"; warn = true; }
-    }
-  };
-  readList(ovIn.v, "vac");
-  readList(ovIn.o, "ot");
-  readList(ovIn.n, "none");
-  let count = 0;
-  for (const [md, type] of Object.entries(seen)) {
-    if (type === "CONFLICT") continue;
-    if (count >= SHARE_MAX_OVERRIDES) { warn = true; break; }
-    out.overridesMd[md] = type; count++;
-  }
-
-  return { state: out, warning: warn };
-}
-
-// Synchroner Dekoder für das alte #plan=-Format (base64url(JSON)).
-function decodeShare(enc) {
-  if (!enc || typeof enc !== "string" || enc.length > SHARE_MAX_DECODED) return null;
-  let jsonStr;
-  try {
-    const bytes = b64urlToBytes(enc);
-    if (bytes.length > SHARE_MAX_DECODED) return null;
-    jsonStr = new TextDecoder().decode(bytes);
-  } catch (e) { return null; }
-  return validateSharePayload(jsonStr);
-}
-
-// Wert eines Schlüssels aus dem URL-Fragment lesen (robust ggü. mehreren
-// &-getrennten Parametern; "p" und "plan" werden exakt unterschieden).
-function getHashParam(hash, key) {
-  const h = (hash || "").replace(/^#/, "");
-  for (const part of h.split("&")) {
-    const eq = part.indexOf("=");
-    if (eq === -1) continue;
-    if (part.slice(0, eq) === key) return part.slice(eq + 1);
-  }
-  return null;
-}
-
-// Erkennt das im Fragment vorliegende Format. #p= (komprimiert) hat Vorrang.
-// Rückgabe: { type: "p"|"plan", raw } oder null.
-function readShareFragment(hash) {
-  const h = (hash != null ? hash : (typeof window !== "undefined" ? window.location.hash : "")) || "";
-  const p = getHashParam(h, "p");
-  if (p != null && p !== "") return { type: "p", raw: p };
-  const legacy = getHashParam(h, "plan");
-  if (legacy != null && legacy !== "") return { type: "plan", raw: legacy };
-  return null;
-}
-
-/* ------------------------------------------------------------------ */
-/* Landing Page: Startansicht vor dem Planer (Einfach-/Profi-Modus)    */
-/* ------------------------------------------------------------------ */
-/* Rein präsentational – nutzt ausschließlich Props der Komponente
-   Urlaubsplaner (dark, cardCls, Einstiegs-Handler). Keine eigene
-   Planungslogik, kein eigener State für Eingaben; ein Klick auf einen
-   der beiden Einstiegs-Buttons wechselt nur die Ansicht (view) und
-   setzt uiMode, ohne bestehende Eingaben zurückzusetzen. */
-// Klick-Vorschau für das Erklärvideo der Landing Page: zeigt zunächst nur ein
-// YouTube-Vorschaubild mit Play-Button; der iframe (youtube-nocookie.com) wird
-// erst nach Klick eingebunden, damit vorher keine YouTube-Ressourcen laden.
-// Smartphone (< 640px, derselbe Mobile-Breakpoint wie in KofiFloatingButton)
-// erhält das Hochkantvideo, Tablet/Desktop das Querformatvideo – reaktiv über
-// matchMedia, damit z. B. eine Fenstergrößenänderung/-drehung korrekt umschaltet.
-function ExplainerVideoSection({ dark, cardCls }) {
-  const MOBILE_QUERY = "(max-width: 639px)";
-  const [isMobile, setIsMobile] = useState(() =>
-    typeof window !== "undefined" && typeof window.matchMedia === "function"
-      ? window.matchMedia(MOBILE_QUERY).matches
-      : false
-  );
-  useEffect(() => {
-    if (typeof window === "undefined" || typeof window.matchMedia !== "function") return;
-    const mql = window.matchMedia(MOBILE_QUERY);
-    const onChange = (e) => setIsMobile(e.matches);
-    if (mql.addEventListener) mql.addEventListener("change", onChange);
-    else mql.addListener(onChange); // Safari < 14
-    return () => {
-      if (mql.removeEventListener) mql.removeEventListener("change", onChange);
-      else mql.removeListener(onChange);
-    };
-  }, []);
-
-  const [played, setPlayed] = useState(false);
-  // Bei Wechsel der Videovariante (z. B. Fenstergrößenänderung) wieder das
-  // Vorschaubild zeigen statt den zuvor gestarteten iframe der anderen Variante.
-  useEffect(() => { setPlayed(false); }, [isMobile]);
-
-  // Vorschaubilder liegen lokal im Projekt (assets/video/), damit vor dem Klick
-  // keine Verbindung zu YouTube/Google entsteht (siehe Datenschutzerklärung,
-  // Abschnitt "Eingebettete YouTube-Videos").
-  const video = isMobile
-    ? { id: "Rw0EefsI4sk", ratio: "aspect-[9/16]", widthCls: "max-w-[320px] mx-auto",
-        thumbnail: "./assets/video/explainer-mobile-Rw0EefsI4sk.jpg", title: t("landing.video.mobileIframeTitle") }
-    : { id: "N1KzGRCX7XA", ratio: "aspect-[16/9]", widthCls: "",
-        thumbnail: "./assets/video/explainer-desktop-N1KzGRCX7XA.jpg", title: t("landing.video.desktopIframeTitle") };
-  const embedUrl = `https://www.youtube-nocookie.com/embed/${video.id}?autoplay=1&playsinline=1`;
-
-  return (
-    <section className="space-y-4">
-      <div className="text-center max-w-2xl mx-auto space-y-2">
-        <h2 className="text-xl font-bold">{t("landing.video.heading")}</h2>
-        <p className={`text-sm leading-relaxed ${dark ? "text-slate-300" : "text-slate-600"}`}>
-          {t("landing.video.description")}
-        </p>
-      </div>
-      <div className={video.widthCls}>
-        <div className={`${cardCls} relative w-full ${video.ratio} overflow-hidden`}>
-          {played ? (
-            <iframe
-              src={embedUrl}
-              title={video.title}
-              className="absolute inset-0 h-full w-full border-0"
-              allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
-              allowFullScreen
-            />
-          ) : (
-            <button type="button" onClick={() => setPlayed(true)}
-              aria-label={t("landing.video.playButtonLabel")}
-              className="group absolute inset-0 h-full w-full cursor-pointer focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-inset">
-              <img src={video.thumbnail} alt={t("landing.video.thumbnailAlt")}
-                className="h-full w-full object-cover" loading="lazy" />
-              <span className="absolute inset-0 flex items-center justify-center bg-black/20 transition-colors group-hover:bg-black/30">
-                <span className="flex h-14 w-14 sm:h-16 sm:w-16 items-center justify-center rounded-full bg-white/90 shadow-lg transition-transform group-hover:scale-105">
-                  <svg viewBox="0 0 24 24" aria-hidden="true" className="h-6 w-6 sm:h-7 sm:w-7 translate-x-0.5 fill-emerald-600">
-                    <path d="M8 5v14l11-7z" />
-                  </svg>
-                </span>
-              </span>
-            </button>
-          )}
-        </div>
-      </div>
-    </section>
-  );
-}
-
-function LandingPage({ dark, setDark, cardCls, onStartSimple, onStartPro }) {
-  const softTextCls = dark ? "text-slate-300" : "text-slate-600";
-  const mutedTextCls = dark ? "text-slate-400" : "text-slate-500";
-  const badgeCls = dark ? "bg-emerald-900/50 text-emerald-300" : "bg-emerald-100 text-emerald-700";
-
-  return (
-    <>
-      <header className="bg-slate-900 text-white">
-        <div className="max-w-6xl mx-auto px-4 py-6 flex items-center justify-between gap-4">
-          <img src="./assets/logo/freilotse-logo-horizontal-dark-bg.svg" alt="FREILOTSE Urlaubsplaner"
-            className="w-[165px] md:w-[200px] h-auto" />
-          <button onClick={() => setDark(!dark)}
-            className="rounded-md border border-slate-600 px-2.5 py-1 text-xs font-semibold text-slate-300 hover:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-emerald-500"
-            title={t("theme.toggleTitle")}>
-            {dark ? t("theme.toLight") : t("theme.toDark")}
-          </button>
-        </div>
-      </header>
-
-      <main className="max-w-6xl mx-auto px-4 py-10 space-y-14">
-        {/* Hero */}
-        <section className="text-center max-w-2xl mx-auto space-y-4" style={{ animation: "upFade .35s ease" }}>
-          <h2 className="text-3xl sm:text-4xl font-bold tracking-tight [text-wrap:balance]">{t("landing.hero.heading")}</h2>
-          <p className={`text-sm sm:text-base leading-relaxed ${softTextCls}`}>{t("landing.hero.description")}</p>
-          <p className={`inline-block rounded-full px-4 py-2 text-sm font-semibold ${dark ? "bg-emerald-900/40 text-emerald-300" : "bg-emerald-50 text-emerald-700"}`}>
-            {t("landing.hero.example")}
-          </p>
-        </section>
-
-        {/* Modus-Auswahl */}
-        <section aria-labelledby="landing-modes-heading" className="space-y-4">
-          <h2 id="landing-modes-heading" className={`text-center text-xs font-bold uppercase tracking-wide ${mutedTextCls}`}>
-            {t("landing.modes.heading")}
-          </h2>
-          <div className="grid gap-4 md:grid-cols-2 items-stretch">
-            {/* Einfach-Karte: visuell stärker hervorgehoben (primärer Einstieg) */}
-            <div className={`${cardCls} p-6 flex flex-col gap-4 border-2 ${dark ? "border-emerald-600" : "border-emerald-500"}`}>
-              <div className="flex items-center gap-2 flex-wrap">
-                <h3 className="text-lg font-bold">{t("landing.modes.simple.title")}</h3>
-                <span className={`text-[10px] font-bold uppercase tracking-wide rounded-full px-2 py-0.5 ${badgeCls}`}>
-                  {t("landing.modes.simple.badge")}
-                </span>
-              </div>
-              <p className={`text-sm ${softTextCls}`}>{t("landing.modes.simple.text")}</p>
-              <ul className="text-sm space-y-1.5 flex-1">
-                {t("landing.modes.simple.benefits").map((b) => (
-                  <li key={b} className="flex items-start gap-2">
-                    <span aria-hidden="true" className="text-emerald-500">✓</span>
-                    <span className={dark ? "text-slate-300" : "text-slate-700"}>{b}</span>
-                  </li>
-                ))}
-              </ul>
-              <button onClick={onStartSimple}
-                className="w-full rounded-lg bg-emerald-600 px-4 py-3 text-sm font-bold text-white hover:bg-emerald-700 focus:outline-none focus:ring-2 focus:ring-emerald-500">
-                {t("landing.modes.simple.button")}
-              </button>
-            </div>
-
-            {/* Profi-Karte */}
-            <div className={`${cardCls} p-6 flex flex-col gap-4`}>
-              <h3 className="text-lg font-bold">{t("landing.modes.pro.title")}</h3>
-              <p className={`text-sm ${softTextCls}`}>{t("landing.modes.pro.text")}</p>
-              <ul className="text-sm space-y-1.5 flex-1">
-                {t("landing.modes.pro.benefits").map((b) => (
-                  <li key={b} className="flex items-start gap-2">
-                    <span aria-hidden="true" className={mutedTextCls}>✓</span>
-                    <span className={dark ? "text-slate-300" : "text-slate-700"}>{b}</span>
-                  </li>
-                ))}
-              </ul>
-              <button onClick={onStartPro}
-                className={`w-full rounded-lg border px-4 py-3 text-sm font-bold focus:outline-none focus:ring-2 focus:ring-emerald-500 ${
-                  dark ? "border-slate-600 text-slate-200 hover:bg-slate-800" : "border-slate-300 text-slate-700 hover:bg-slate-100"
-                }`}>
-                {t("landing.modes.pro.button")}
-              </button>
-            </div>
-          </div>
-        </section>
-
-        {/* Erklärvideo: Smartphone erhält ein Hochkantvideo (9:16), Tablet/Desktop
-            ein Querformatvideo (16:9) – Auswahl rein per matchMedia anhand des
-            im Projekt bereits verwendeten Mobile-Breakpoints (< 640px, siehe
-            KofiFloatingButton). Es wird nie mehr als ein iframe gleichzeitig
-            eingebunden; vor dem Klick nur ein statisches Vorschaubild. */}
-        <ExplainerVideoSection dark={dark} cardCls={cardCls} />
-
-        {/* Funktionsbereich */}
-        <section className="space-y-4">
-          <h2 className="text-center text-xl font-bold">{t("landing.features.heading")}</h2>
-          <div className="grid gap-4 sm:grid-cols-3">
-            {t("landing.features.items").map((f) => (
-              <div key={f.title} className={`${cardCls} p-5 space-y-2`}>
-                <div className="text-2xl" aria-hidden="true">{f.icon}</div>
-                <h3 className="text-sm font-bold">{f.title}</h3>
-                <p className={`text-xs leading-relaxed ${mutedTextCls}`}>{f.text}</p>
-              </div>
-            ))}
-          </div>
-        </section>
-
-        {/* Ablauf: kompakte, verbundene Schrittfolge statt große Karten -
-            unterscheidet sich dadurch bewusst vom Funktionsbereich oben. */}
-        <section className="space-y-4">
-          <h2 className="text-center text-xl font-bold">{t("landing.steps.heading")}</h2>
-          <div role="list" className="flex flex-col sm:flex-row sm:items-start">
-            {t("landing.steps.items").map((s, i, arr) => (
-              <React.Fragment key={s.title}>
-                <div role="listitem" className="flex flex-col gap-1.5 sm:flex-1 sm:items-center sm:gap-2 sm:text-center sm:px-2">
-                  <div className="flex items-center gap-2.5 sm:flex-col sm:gap-2">
-                    <span className={`inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-xs font-bold ${badgeCls}`}>
-                      {i + 1}
-                    </span>
-                    <h3 className="text-sm font-bold">{s.title}</h3>
-                  </div>
-                  <p className={`text-xs leading-relaxed pl-[34px] sm:pl-0 ${mutedTextCls}`}>{s.text}</p>
-                </div>
-                {i < arr.length - 1 && (
-                  <>
-                    {/* Desktop: dezente horizontale Verbindungslinie zwischen den Schritten */}
-                    <div aria-hidden="true"
-                      className={`hidden sm:block sm:flex-1 sm:mt-3 sm:h-px ${dark ? "bg-slate-700" : "bg-slate-300"}`} />
-                    {/* Mobil: kurze vertikale Verbindung statt horizontaler Linie (kein Overflow) */}
-                    <div aria-hidden="true"
-                      className={`sm:hidden ml-[14px] h-3 w-px ${dark ? "bg-slate-700" : "bg-slate-300"}`} />
-                  </>
-                )}
-              </React.Fragment>
-            ))}
-          </div>
-        </section>
-
-        {/* Vertrauenshinweise */}
-        <section className={`flex flex-wrap justify-center gap-x-6 gap-y-2 text-xs ${mutedTextCls}`}>
-          {t("landing.trust.items").map((item) => (
-            <span key={item} className="inline-flex items-center gap-1.5">
-              <span aria-hidden="true" className="text-emerald-500">✓</span> {item}
-            </span>
-          ))}
-        </section>
-      </main>
-
-      {/* Einheitlicher Seitenabschluss – auch auf der Landingpage */}
-      <SiteFooter dark={dark} />
-    </>
-  );
 }
 
 /* ------------------------------------------------------------------ */
@@ -1013,7 +131,7 @@ function Urlaubsplaner({ onPlanReady }) {
   const sharedRef = useRef(undefined);
   if (sharedRef.current === undefined) {
     const frag = readShareFragment(typeof window !== "undefined" ? window.location.hash : "");
-    const parsed = frag && frag.type === "plan" ? decodeShare(frag.raw) : null;
+    const parsed = frag && frag.type === "plan" ? decodeShare(frag.raw, STATE_CODES) : null;
     sharedRef.current = { frag, parsed, had: !!frag };
   }
   const shared = sharedRef.current.parsed ? sharedRef.current.parsed.state : null;
@@ -1025,6 +143,11 @@ function Urlaubsplaner({ onPlanReady }) {
   const [ot, setOt] = useState(shared ? shared.ot : 0);
   const [xmasRule, setXmasRule] = useState(shared ? shared.xmasRule : "50"); // Standard: halber Urlaubstag am 24./31.12.
   const [showWeekendHolidays, setShowWeekendHolidays] = useState(shared ? shared.showWeekendHolidays : true);
+  // Regelmäßige Arbeitstage – gemeinsamer Zustand für Einfach- UND Profi-Modus
+  // (siehe CLAUDE.md, Abschnitt „Regelmäßige Arbeitstage"). Format: Array von
+  // Date.getUTCDay()-Indizes (0=So…6=Sa), Standard Montag–Freitag. NUR für
+  // dauerhaft gleichbleibende Wochenmuster – keine wechselnden Schichten.
+  const [workingWeekdays, setWorkingWeekdays] = useState(shared ? shared.workingWeekdays : [1, 2, 3, 4, 5]);
   const [blocks, setBlocks] = useState(shared ? shared.blocks : []);
   // Budget der automatischen Verteilung; "" = automatisch das Minimum nutzen
   const [autoVac, setAutoVac] = useState(shared ? shared.autoVac : "");
@@ -1070,6 +193,9 @@ function Urlaubsplaner({ onPlanReady }) {
   const [simpleGoal, setSimpleGoal] = useState(shared ? shared.simpleGoal : "free"); // free | blocks | short
   const [simpleStarted, setSimpleStarted] = useState(shared ? shared.simpleStarted : false);
   const [showSimpleCal, setShowSimpleCal] = useState(false);
+  // Nur lokaler UI-Zustand (Einfachmodus): ist die Wochentags-Auswahl gerade
+  // aufgeklappt? Nicht Teil von workingWeekdays selbst, nicht im Share-Link.
+  const [showWorkingDaysEditor, setShowWorkingDaysEditor] = useState(false);
   // Mobilfreundliche Kalender-Navigation: Zielmonat, der nach dem Sprung kurz
   // hervorgehoben wird, und ein wartender Zielmonat, falls der Kalender im
   // Einfachmodus erst noch eingeblendet werden muss. Gemeinsam für beide Modi.
@@ -1141,31 +267,16 @@ function Urlaubsplaner({ onPlanReady }) {
     let ignore = false;
     setApiStatus("laedt");
     setApiHolidays(null);
-    fetch(`https://feiertage-api.de/api/?jahr=${year}&nur_land=${st}`)
-      .then((r) => {
-        if (!r.ok) throw new Error(`HTTP ${r.status}`);
-        return r.json();
-      })
-      .then((json) => {
-        if (ignore) return;
-        const map = {};
-        for (const [name, info] of Object.entries(json)) {
-          if (!info || !info.datum) continue;
-          if (name.toLowerCase().includes("augsburg")) continue; // gilt nur in der Stadt Augsburg
-          const [yy, mm, dd] = info.datum.split("-").map((x) => parseInt(x, 10));
-          if (yy === year && mm >= 1 && dd >= 1) map[`${mm - 1}-${dd}`] = name;
-        }
-        if (Object.keys(map).length === 0) throw new Error("keine Daten");
-        setApiHolidays(map);
-        setApiStatus("api");
-      })
-      .catch(() => {
-        if (!ignore) { setApiHolidays(null); setApiStatus("lokal"); }
-      });
+    loadPublicHolidays(year, st).then((result) => {
+      if (ignore) return;
+      setApiHolidays(result.holidays);
+      setApiStatus(result.status);
+    });
     return () => { ignore = true; };
   }, [year, st, view]);
 
-  const days = useMemo(() => buildDays(year, st, xmasRule, apiHolidays), [year, st, xmasRule, apiHolidays]);
+  const days = useMemo(() => buildDays(year, st, xmasRule, apiHolidays, t, workingWeekdays),
+    [year, st, xmasRule, apiHolidays, workingWeekdays]);
 
   // Schulferien: Primärquelle OpenHolidays API, automatische Ersatzquelle
   // schulferien-api.de (siehe loadSchoolHolidays() oben). Nur Planungshinweis
@@ -1201,7 +312,7 @@ function Urlaubsplaner({ onPlanReady }) {
   }, [year, st, view]);
 
   // Ferien-Tagesmap fürs sichtbare Jahr (beide Modi nutzen dieselben Daten)
-  const vacationDays = useMemo(() => vacationDayMap(vacations, year), [vacations, year]);
+  const vacationDays = useMemo(() => vacationDayMap(vacations, year, t), [vacations, year]);
   // Echte Daten liegen nur vor, wenn eine Quelle erfolgreich UND mit Inhalt
   // geladen wurde – ein leeres, aber technisch erfolgreiches Ergebnis zählt
   // ausdrücklich NICHT als "Daten vorhanden" (siehe vacStatus "keine").
@@ -1372,7 +483,7 @@ function Urlaubsplaner({ onPlanReady }) {
       year, st, vac: num(vac), ot: num(ot), xmasRule,
       uiMode, simpleGoal, simpleStarted, schoolHolidayPreference,
       autoVac, autoOt, spendFirst, autoFrom, showWeekendHolidays,
-      blocks, overridesMd: yearOverrides,
+      blocks, overridesMd: yearOverrides, workingWeekdays,
     });
   const shareBaseUrl = () => `${window.location.origin}${window.location.pathname}`;
 
@@ -1398,6 +509,7 @@ function Urlaubsplaner({ onPlanReady }) {
     setSchoolHolidayPreference(s.schoolHolidayPreference);
     setAutoVac(s.autoVac); setAutoOt(s.autoOt); setSpendFirst(s.spendFirst);
     setAutoFrom(s.autoFrom); setShowWeekendHolidays(s.showWeekendHolidays); setBlocks(s.blocks);
+    setWorkingWeekdays(s.workingWeekdays);
     const o = {};
     for (const [md, val] of Object.entries(s.overridesMd || {})) o[`${s.year}:${md}`] = val;
     setOverrides(o);
@@ -1462,7 +574,7 @@ function Urlaubsplaner({ onPlanReady }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [year, st, vac, ot, xmasRule, uiMode, simpleGoal, simpleStarted,
       schoolHolidayPreference, autoVac, autoOt, spendFirst, autoFrom,
-      showWeekendHolidays, blocks, yearOverrides, view]);
+      showWeekendHolidays, workingWeekdays, blocks, yearOverrides, view]);
 
   // Beim Start: geteilte Planung anwenden (bei #p= asynchron dekomprimieren),
   // Hinweis zeigen und das Fragment aus der Adresszeile entfernen (sauberes
@@ -1494,7 +606,7 @@ function Urlaubsplaner({ onPlanReady }) {
       try {
         if (info.frag.raw.length <= SHARE_MAX_DECODED) {
           const json = await inflateFromB64url(info.frag.raw);
-          res = validateSharePayload(json);
+          res = validateSharePayload(json, STATE_CODES);
         }
       } catch (e) { res = null; }
       if (cancelled) return;
@@ -1571,10 +683,26 @@ function Urlaubsplaner({ onPlanReady }) {
   const usedVac = num(vac) - result.budget.vac;
   const usedOt = num(ot) - result.budget.ot;
   const totalFree = result.periods.reduce((a, p) => a + p.len, 0);
+  const periodCount = result.periods.length;
   const longest = result.periods.reduce((a, p) => Math.max(a, p.len), 0);
   const leverage = usedVac + usedOt > 0 ? totalFree / (usedVac + usedOt) : 0;
-  const weekendHolidayCount = days.filter((d) => d.holiday && d.weekend).length;
-  const weekdayHolidayCount = days.filter((d) => d.holiday && !d.weekend).length;
+  // Nur Feiertage INNERHALB der vorgeschlagenen freien Zeiträume zählen, nicht
+  // das gesamte Kalenderjahr – sonst wäre die Kennzahl unabhängig davon, ob die
+  // Planung diese Feiertage überhaupt nutzt. Ein Feiertag "spart" bzw. "nutzt"
+  // dabei nur dann etwas, wenn er auf einen PERSÖNLICHEN regulären Arbeitstag
+  // fällt (isWorkingDay) – ein Feiertag an einem regelmäßig freien Wochentag
+  // hätte ohnehin keinen Urlaubstag gekostet. Getrennt davon: echte
+  // Wochenendfeiertage (Sa/So) werden nur zusätzlich angezeigt (Checkbox
+  // "Feiertage an Samstag/Sonntag einbeziehen"), unabhängig vom Wochenplan –
+  // ohne die "&& !isWorkingDay"-Einschränkung würde ein Feiertag an einem
+  // persönlichen Arbeits-Samstag (z. B. Di–Sa) doppelt gezählt.
+  const countHolidaysInPeriods = (predicate) => result.periods.reduce((sum, p) => {
+    let c = 0;
+    for (let k = p.s; k <= p.e; k++) if (days[k].holiday && predicate(days[k])) c++;
+    return sum + c;
+  }, 0);
+  const periodWorkingDayHolidayCount = countHolidaysInPeriods((d) => d.isWorkingDay);
+  const periodWeekendHolidayCount = countHolidaysInPeriods((d) => d.weekend && !d.isWorkingDay);
 
   const addBlock = () => setBlocks([...blocks, { len: 9, month: "", ot: "" }]);
   const updBlock = (i, patch) => setBlocks(blocks.map((b, j) => (j === i ? { ...b, ...patch } : b)));
@@ -1586,6 +714,60 @@ function Urlaubsplaner({ onPlanReady }) {
   const labelCls = `block text-xs font-semibold uppercase tracking-wide ${dark ? "text-slate-400" : "text-slate-500"} mb-1`;
   const cardCls = dark ? "bg-slate-900 border border-slate-800 rounded-xl shadow-sm" : "bg-white rounded-xl shadow-sm";
   const subLabelCls = `text-xs font-semibold uppercase tracking-wide ${dark ? "text-slate-400" : "text-slate-600"}`;
+
+  // Regelmäßige Arbeitstage – EIN gemeinsamer Zustand (workingWeekdays) und
+  // EIN Rendering für Einfach- UND Profi-Modus. Reine UI-/Ableitungslogik;
+  // greift nicht in plan()/buildDays() selbst ein (das übernimmt der bereits
+  // an buildDays() übergebene workingWeekdays-State weiter oben).
+  const WEEKDAY_ORDER = [1, 2, 3, 4, 5, 6, 0]; // Anzeige Mo..So (Woche beginnt Montag, wie im Kalender)
+  const weekdayFullNames = t("weekdaysFullApiOrder"); // Index = Date.getUTCDay()
+  const isDefaultWorkweek = workingWeekdays.length === 5 && [1, 2, 3, 4, 5].every((d) => workingWeekdays.includes(d));
+  const toggleWorkingWeekday = (dow) => {
+    setWorkingWeekdays((prev) => {
+      if (prev.includes(dow)) {
+        if (prev.length <= 1) return prev; // mindestens ein Arbeitstag muss ausgewählt bleiben
+        return prev.filter((d) => d !== dow);
+      }
+      return [...prev, dow].sort((a, b) => a - b);
+    });
+  };
+  const resetWorkingWeekdays = () => setWorkingWeekdays([1, 2, 3, 4, 5]);
+  // Zusammenfassungstext: erkennt eine lückenlose Kette in der Mo..So-Reihenfolge
+  // ("Montag bis Freitag"/"Dienstag bis Samstag") und fällt sonst auf eine
+  // einfache Aufzählung zurück (z. B. "Dienstag, Donnerstag").
+  const workingWeekdaysSummary = () => {
+    if (isDefaultWorkweek) return t("workingDays.defaultSummary");
+    const ordered = WEEKDAY_ORDER.filter((d) => workingWeekdays.includes(d));
+    const idxs = ordered.map((d) => WEEKDAY_ORDER.indexOf(d));
+    const contiguous = ordered.length > 1 && idxs.every((v, i) => i === 0 || v === idxs[i - 1] + 1);
+    if (contiguous) {
+      return t("workingDays.summaryRange", { from: weekdayFullNames[ordered[0]], to: weekdayFullNames[ordered[ordered.length - 1]] });
+    }
+    return t("workingDays.summaryList", { days: ordered.map((d) => weekdayFullNames[d]) });
+  };
+  // Sieben Wochentags-Schaltflächen (Mo..So), identisch in Einfach- und
+  // Profi-Modus. aria-pressed macht den Auswahlzustand für Screenreader
+  // eindeutig; Kurzform (DOWS) sichtbar, voller Name als aria-label.
+  const workingWeekdayButtons = () => (
+    <div className="flex flex-wrap gap-1.5" role="group" aria-label={t("workingDays.question")}>
+      {WEEKDAY_ORDER.map((dow) => {
+        const active = workingWeekdays.includes(dow);
+        return (
+          <button key={dow} type="button"
+            aria-pressed={active}
+            aria-label={weekdayFullNames[dow]}
+            onClick={() => toggleWorkingWeekday(dow)}
+            className={`h-9 min-w-[2.75rem] px-2 rounded-md text-xs font-semibold border focus:outline-none focus:ring-2 focus:ring-emerald-500 ${
+              active
+                ? "bg-emerald-600 border-emerald-600 text-white"
+                : dark ? "border-slate-600 text-slate-300 hover:bg-slate-800" : "border-slate-300 text-slate-600 hover:bg-slate-100"
+            }`}>
+            {DOWS[dow]}
+          </button>
+        );
+      })}
+    </div>
+  );
 
   // Schulferien-Präferenz – EIN Markup für beide Modi (kein doppelter Erklärtext).
   // withHint=true zeigt zusätzlich den kurzen Hilfetext (nur im Profi-Modus nötig).
@@ -1678,7 +860,7 @@ function Urlaubsplaner({ onPlanReady }) {
     for (const d of days) {
       if (d.m !== m || !d.holiday) continue;
       if (d.weekend && !showWeekendHolidays) continue;
-      if (!seenH.has(d.holiday)) { seenH.add(d.holiday); holidayNames.push(d.holiday); }
+      if (!seenH.has(d.holiday)) { seenH.add(d.holiday); holidayNames.push(withAssumptionDayCaveat(d.holiday, d, st)); }
     }
     let holidaysText = null;
     if (holidayNames.length > 0) {
@@ -1769,7 +951,7 @@ function Urlaubsplaner({ onPlanReady }) {
                         : null;
                       return (
                         <button key={day.i} type="button"
-                          title={vacTipText ? `${dayTitle(day, selType)} · ${vacTipText}` : dayTitle(day, selType)}
+                          title={vacTipText ? `${dayTitle(day, selType, st)} · ${vacTipText}` : dayTitle(day, selType, st)}
                           data-dayindex={day.i}
                           onClick={() => {
                             if (dragAppliedRef.current) { dragAppliedRef.current = false; return; }
@@ -1836,9 +1018,15 @@ function Urlaubsplaner({ onPlanReady }) {
     let weekends = 0, inWeekend = false;
     for (let k = p.s; k <= p.e; k++) {
       const d = days[k];
-      if (d.holiday && !seen.has(d.holiday)) { seen.add(d.holiday); holidayNames.push(d.holiday); }
-      if (d.special === t("special.christmasEve")) hasXmasEve = true;
-      if (d.special === t("special.newYearsEve")) hasNYE = true;
+      // Ein Feiertag/Sondertag erklärt die Attraktivität des Zeitraums nur dann
+      // sinnvoll, wenn er auf einen persönlichen regulären Arbeitstag fällt -
+      // an einem regelmäßig freien Wochentag hätte er ohnehin nichts "gespart".
+      if (d.holiday && d.isWorkingDay && !seen.has(d.holiday)) { seen.add(d.holiday); holidayNames.push(d.holiday); }
+      if (d.special === t("special.christmasEve") && d.isWorkingDay) hasXmasEve = true;
+      if (d.special === t("special.newYearsEve") && d.isWorkingDay) hasNYE = true;
+      // "weekends" zählt bewusst ECHTE Kalenderwochenenden (unabhängig vom
+      // persönlichen Wochenplan) - die Formulierungen sprechen explizit von
+      // "Wochenende" und meinen damit Samstag/Sonntag, nicht regelmäßig freie Tage.
       if (d.weekend) { if (!inWeekend) { weekends++; inWeekend = true; } } else inWeekend = false;
     }
     const invested = p.vac + p.ot;
@@ -1977,7 +1165,11 @@ function Urlaubsplaner({ onPlanReady }) {
           <div className="text-right">
             <p className="text-4xl font-bold tabular-nums text-emerald-400">{totalFree}</p>
             <p className="text-xs text-slate-300">
-              {t("header.freeDaysSuffix", { usedVac: fmtNum(usedVac), usedOt: usedOt > 0 ? fmtNum(usedOt) : 0 })}
+              {t("header.freeDaysSuffix", {
+                total: totalFree, periods: periodCount,
+                usedVac: fmtNum(usedVac), usedVacRaw: usedVac,
+                usedOt: usedOt > 0 ? fmtNum(usedOt) : 0, usedOtRaw: usedOt,
+              })}
             </p>
           </div>
         </div>
@@ -2030,6 +1222,43 @@ function Urlaubsplaner({ onPlanReady }) {
                       <option key={k} value={k}>{v}</option>
                     ))}
                   </select>
+                </div>
+
+                <div className="space-y-2">
+                  <p className={labelCls}>{t("simple.stepWorkdaysQuestion")}</p>
+                  {!showWorkingDaysEditor ? (
+                    <div className="flex items-center justify-between gap-2">
+                      <span className={`text-sm ${dark ? "text-slate-300" : "text-slate-700"}`}>
+                        {workingWeekdaysSummary()}
+                      </span>
+                      <button type="button" onClick={() => setShowWorkingDaysEditor(true)}
+                        className="shrink-0 text-xs font-semibold text-emerald-600 hover:underline focus:outline-none focus:ring-2 focus:ring-emerald-500 rounded">
+                        {t("workingDays.changeButton")}
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="space-y-2">
+                      {workingWeekdayButtons()}
+                      <p className={`text-xs ${dark ? "text-slate-400" : "text-slate-500"}`}>{workingWeekdaysSummary()}</p>
+                      <div className="flex items-center justify-between gap-2">
+                        {!isDefaultWorkweek ? (
+                          <button type="button" onClick={resetWorkingWeekdays}
+                            className="text-xs font-semibold text-emerald-600 hover:underline focus:outline-none focus:ring-2 focus:ring-emerald-500 rounded">
+                            {t("workingDays.resetButton")}
+                          </button>
+                        ) : <span />}
+                        <button type="button" onClick={() => setShowWorkingDaysEditor(false)}
+                          className={`text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-emerald-500 rounded ${
+                            dark ? "text-slate-400 hover:text-slate-200" : "text-slate-500 hover:text-slate-700"
+                          }`}>
+                          {t("workingDays.closeButton")}
+                        </button>
+                      </div>
+                      <p className={`text-[11px] leading-snug ${dark ? "text-slate-500" : "text-slate-400"}`}>
+                        {t("workingDays.minOneRequired")}
+                      </p>
+                    </div>
+                  )}
                 </div>
 
                 <div className="space-y-2">
@@ -2113,13 +1342,14 @@ function Urlaubsplaner({ onPlanReady }) {
                         <p className={`text-sm ${dark ? "text-slate-400" : "text-slate-500"}`}>{t("simple.freeDaysLabel")}</p>
                       </div>
                       <div className={`text-sm space-y-1 ${dark ? "text-slate-300" : "text-slate-600"}`}>
-                        <p>{t("simple.statHolidaysUsed", { count: weekdayHolidayCount })}</p>
-                        <p>{t("simple.statBridgeDaysUsed", { count: fmtNum(usedVac) })}</p>
-                        <p>{t("simple.statTotalFree", { count: totalFree })}</p>
+                        <p>{t("simple.statTotalFree", { count: totalFree, periods: periodCount })}</p>
+                        <p>{t("simple.statVacationDaysUsed", { count: fmtNum(usedVac), countRaw: usedVac })}</p>
+                        <p>{t("simple.statHolidaysUsed", { count: periodWorkingDayHolidayCount })}</p>
+                        <p>{t("simple.statLongestStreak", { count: longest })}</p>
                       </div>
                     </div>
                     <p className={`mt-4 text-sm ${dark ? "text-slate-400" : "text-slate-500"}`}>
-                      {t("simple.summarySentence", { usedVac: fmtNum(usedVac), totalVac: fmtNum(num(vac)), totalFree })}
+                      {t("simple.summarySentence", { usedVac: fmtNum(usedVac), totalVac: fmtNum(num(vac)), totalFree, periods: periodCount })}
                     </p>
                   </section>
 
@@ -2254,6 +1484,11 @@ function Urlaubsplaner({ onPlanReady }) {
                   {vacStatus === "keine" && <span className="text-rose-600 font-semibold">{t("settings.schoolHolidaySourceNone")}</span>}
                   {vacStatus === "fehler" && <span className="text-rose-600 font-semibold">{t("settings.schoolHolidaySourceUnreachable")}</span>}
                 </p>
+                {st === "BY" && (
+                  <p className={`text-[11px] leading-snug ${dark ? "text-amber-300/90" : "text-amber-700"}`}>
+                    {t("holidayCaveats.assumptionDayNotice")}
+                  </p>
+                )}
               </CollapsibleCard>
 
               <CollapsibleCard icon="⚙" title={t("workRules.panelTitle")} open={panels.regelung}
@@ -2271,6 +1506,24 @@ function Urlaubsplaner({ onPlanReady }) {
                     onChange={(e) => setShowWeekendHolidays(e.target.checked)} />
                   <span>{t("workRules.includeWeekendHolidays")}</span>
                 </label>
+                <div>
+                  <div className="flex items-center justify-between mb-1">
+                    <span className={subLabelCls}>{t("workingDays.proPanelTitle")}</span>
+                    {!isDefaultWorkweek && (
+                      <button type="button" onClick={resetWorkingWeekdays}
+                        className="text-[11px] font-semibold text-emerald-600 hover:underline focus:outline-none focus:ring-2 focus:ring-emerald-500 rounded">
+                        {t("workingDays.resetButton")}
+                      </button>
+                    )}
+                  </div>
+                  {workingWeekdayButtons()}
+                  <p className={`mt-1 text-[11px] leading-snug ${dark ? "text-slate-500" : "text-slate-400"}`}>
+                    {t("workingDays.proHint")}
+                  </p>
+                  <p className={`text-[11px] leading-snug ${dark ? "text-slate-500" : "text-slate-400"}`}>
+                    {t("workingDays.minOneRequired")}
+                  </p>
+                </div>
               </CollapsibleCard>
 
               <CollapsibleCard icon="🤖" title={t("auto.panelTitle")} open={panels.auto}
@@ -2403,7 +1656,7 @@ function Urlaubsplaner({ onPlanReady }) {
             {[
               { v: fmtNum(leverage), l: t("metrics.leverage") },
               { v: longest, l: t("metrics.longestStreak") },
-              { v: showWeekendHolidays ? `${weekdayHolidayCount} + ${weekendHolidayCount}` : weekdayHolidayCount,
+              { v: showWeekendHolidays ? `${periodWorkingDayHolidayCount} + ${periodWeekendHolidayCount}` : periodWorkingDayHolidayCount,
                 l: showWeekendHolidays ? t("metrics.holidaysWithWeekend") : t("metrics.holidaysWorkdaysOnly") },
               { v: `${fmtNum(result.budget.vac)} / ${fmtNum(result.budget.ot)}`, l: t("metrics.remaining") },
             ].map((s, i) => (
@@ -2509,6 +1762,12 @@ function Urlaubsplaner({ onPlanReady }) {
                 ["bg-amber-300", t("legend.xmasFree")],
                 ["bg-amber-100 border border-amber-300", t("legend.xmasHalf")],
                 [dark ? "bg-slate-700" : "bg-slate-200", t("legend.weekend")],
+                // Nur relevant (und daher nur sichtbar), wenn von Montag–Freitag
+                // abgewichen wird – überlädt die Legende sonst unnötig.
+                ...(isDefaultWorkweek ? [] : [[
+                  dark ? "bg-slate-800/60 border border-dashed border-slate-700" : "bg-slate-100 border border-dashed border-slate-300",
+                  t("legend.regularlyOff"),
+                ]]),
                 [dark ? "bg-slate-800 ring-2 ring-slate-400" : "bg-white ring-2 ring-slate-500", t("legend.manualSet")],
                 ["bg-orange-400", t("legend.schoolHolidays")],
               ].map(([c, l]) => (
@@ -2614,305 +1873,6 @@ function Urlaubsplaner({ onPlanReady }) {
         </div>
       )}
     </div>
-  );
-}
-
-/* Rechtliche Seiten + Navigation                                      */
-/* ------------------------------------------------------------------ */
-
-function internalNavigate(event, path) {
-  if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
-  event.preventDefault();
-  window.history.pushState(null, "", path);
-  window.dispatchEvent(new PopStateEvent("popstate"));
-  window.scrollTo({ top: 0, behavior: "auto" });
-}
-
-function SiteLink({ to, children, className = "" }) {
-  return <a href={to} onClick={(event) => internalNavigate(event, to)} className={className}>{children}</a>;
-}
-
-const KOFI_URL = "https://ko-fi.com/freilotse";
-const KOFI_ARIA_LABEL = "FREILOTSE über Ko-fi mit einem Kaffee unterstützen";
-const KOFI_LABEL_TEXT = "Supporte FREILOTSE mit einem Kaffee";
-const KOFI_HINT_TEXT = "Hat dir FREILOTSE geholfen? Unterstütze das Projekt ☕";
-
-function CoffeeIcon({ className = "" }) {
-  return (
-    <svg aria-hidden="true" focusable="false" viewBox="0 0 24 24" width="16" height="16"
-      className={className} fill="none" stroke="currentColor" strokeWidth="2"
-      strokeLinecap="round" strokeLinejoin="round">
-      <path d="M4 8h12a1 1 0 0 1 1 1v5a5 5 0 0 1-5 5H8a5 5 0 0 1-5-5V9a1 1 0 0 1 1-1Z" />
-      <path d="M17 10h1a3 3 0 0 1 0 6h-1" />
-      <path d="M8 2.5c-.3.8-1 1-1 2s.7 1.2 1 2" />
-      <path d="M12 2.5c-.3.8-1 1-1 2s.7 1.2 1 2" />
-    </svg>
-  );
-}
-
-function KofiFooterLink({ dark }) {
-  return (
-    <a href={KOFI_URL} target="_blank" rel="noopener noreferrer"
-      className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 font-semibold transition-colors focus:outline-none focus:ring-2 focus:ring-emerald-500 ${
-        dark ? "bg-emerald-900/40 text-emerald-300 hover:bg-emerald-900/60" : "bg-emerald-50 text-emerald-700 hover:bg-emerald-100"
-      }`}>
-      <CoffeeIcon />
-      FREILOTSE unterstützen
-    </a>
-  );
-}
-
-function KofiFloatingButton({ planReady, path }) {
-  const [interactiveExpanded, setInteractiveExpanded] = useState(false);
-  const [autoExpanded, setAutoExpanded] = useState(false);
-  const canHoverRef = useRef(false);
-  const autoShownRef = useRef(false);
-  const delayTimerRef = useRef(null);
-  const hideTimerRef = useRef(null);
-  const pathRef = useRef(path);
-
-  useEffect(() => {
-    canHoverRef.current = typeof window.matchMedia === "function"
-      && window.matchMedia("(hover: hover) and (pointer: fine)").matches;
-  }, []);
-
-  // Aktuellen Pfad in einem Ref nachführen, damit der verzögerte Timer beim
-  // Auslösen den Pfad zu diesem Zeitpunkt prüfen kann (nicht den Pfad, der
-  // beim Start der 1 Minute galt).
-  useEffect(() => { pathRef.current = path; }, [path]);
-
-  // Timer beim Unmounten der Seite sauber aufräumen (separat von der
-  // Auslöse-Logik, damit ein Cleanup nicht bei jeder Prop-Änderung feuert).
-  useEffect(() => () => {
-    if (delayTimerRef.current) clearTimeout(delayTimerRef.current);
-    if (hideTimerRef.current) clearTimeout(hideTimerRef.current);
-  }, []);
-
-  useEffect(() => {
-    if (!planReady || autoShownRef.current) return;
-    if (path === "/impressum" || path === "/datenschutz") return;
-    // Einmaliger 1-Minuten-Timer nach dem ersten sichtbaren Planungsergebnis;
-    // sofort gesperrt, damit eine erneute Berechnung keinen zweiten Timer
-    // startet.
-    autoShownRef.current = true;
-    delayTimerRef.current = setTimeout(() => {
-      delayTimerRef.current = null;
-      if (pathRef.current === "/impressum" || pathRef.current === "/datenschutz") return;
-      // Auf schmalen Smartphone-Displays wird der automatische Hinweis
-      // unterdrückt, da der längere Hinweistext dort Inhalte verdecken
-      // könnte; Tippen öffnet Ko-fi weiterhin direkt (unverändertes
-      // Verhalten).
-      if (typeof window.matchMedia === "function" && !window.matchMedia("(min-width: 640px)").matches) return;
-      setAutoExpanded(true);
-      hideTimerRef.current = setTimeout(() => setAutoExpanded(false), 7000);
-    }, 1 * 60 * 1000);
-  }, [planReady, path]);
-
-  const expanded = interactiveExpanded || autoExpanded;
-
-  return (
-    <>
-      <style>{`
-        .kofi-fab { position: fixed; right: 0; top: 50%; transform: translateY(-50%); }
-        @media (max-width: 639px) {
-          .kofi-fab { top: auto; transform: none; bottom: max(1.25rem, env(safe-area-inset-bottom)); }
-        }
-        .kofi-fab-label {
-          display: inline-block; max-width: 0; margin-left: 0; opacity: 0; overflow: hidden; white-space: nowrap;
-          transition: max-width .3s ease, opacity .25s ease, margin-left .3s ease;
-        }
-        .kofi-fab-label.is-expanded { max-width: 440px; opacity: 1; margin-left: .5rem; }
-        @media (prefers-reduced-motion: reduce) {
-          .kofi-fab-label { transition: none; }
-        }
-      `}</style>
-      <a href={KOFI_URL} target="_blank" rel="noopener noreferrer" aria-label={KOFI_ARIA_LABEL}
-        onMouseEnter={() => { if (canHoverRef.current) setInteractiveExpanded(true); }}
-        onMouseLeave={() => { if (canHoverRef.current) setInteractiveExpanded(false); }}
-        onFocus={() => setInteractiveExpanded(true)}
-        onBlur={() => setInteractiveExpanded(false)}
-        className="kofi-fab z-30 flex items-center overflow-hidden rounded-l-full border border-r-0 border-emerald-400/30 bg-slate-900 py-3 pl-3 pr-3 text-white shadow-lg hover:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-emerald-500">
-        <CoffeeIcon className="shrink-0 text-emerald-400" />
-        <span className={`kofi-fab-label text-sm font-semibold${expanded ? " is-expanded" : ""}`}>
-          {autoExpanded ? KOFI_HINT_TEXT : KOFI_LABEL_TEXT}
-        </span>
-      </a>
-    </>
-  );
-}
-
-function SiteFooter({ dark = true }) {
-  const muted = dark ? "text-slate-400" : "text-slate-500";
-  const hover = dark ? "hover:text-white" : "hover:text-slate-900";
-  return (
-    <footer className={`border-t ${dark ? "border-slate-800 bg-slate-950" : "border-slate-200 bg-white"}`}>
-      <div className={`mx-auto flex max-w-6xl flex-col gap-3 px-4 py-6 text-xs sm:flex-row sm:items-center sm:justify-between ${muted}`}>
-        <p>© {new Date().getFullYear()} FREILOTSE</p>
-        <nav aria-label="Rechtliches und Unterstützung" className="flex flex-wrap items-center gap-x-4 gap-y-2">
-          <SiteLink to="/impressum" className={hover}>Impressum</SiteLink>
-          <SiteLink to="/datenschutz" className={hover}>Datenschutz</SiteLink>
-          <KofiFooterLink dark={dark} />
-        </nav>
-      </div>
-    </footer>
-  );
-}
-
-function LegalLayout({ title, children }) {
-  useEffect(() => {
-    let robots = document.querySelector('meta[name="robots"]');
-    const created = !robots;
-    const previousContent = robots?.getAttribute("content");
-
-    if (!robots) {
-      robots = document.createElement("meta");
-      robots.setAttribute("name", "robots");
-      document.head.appendChild(robots);
-    }
-    robots.setAttribute("content", "noindex, follow, noarchive");
-
-    return () => {
-      if (created) robots.remove();
-      else if (previousContent === null) robots.removeAttribute("content");
-      else robots.setAttribute("content", previousContent);
-    };
-  }, []);
-
-  return (
-    <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col">
-      <header className="border-b border-slate-800 bg-slate-900">
-        <div className="mx-auto flex max-w-3xl items-center justify-between gap-4 px-4 py-5">
-          <SiteLink to="/" className="font-bold tracking-tight text-white hover:text-emerald-400">FREILOTSE</SiteLink>
-          <SiteLink to="/" className="text-sm text-slate-300 hover:text-white">Zum Urlaubsplaner</SiteLink>
-        </div>
-      </header>
-      <main className="mx-auto w-full max-w-3xl flex-1 px-4 py-10">
-        <article className="rounded-xl border border-slate-800 bg-slate-900 p-5 shadow-sm sm:p-8">
-          <h1 className="mb-8 text-3xl font-bold tracking-tight">{title}</h1>
-          <div className="space-y-7 text-sm leading-7 text-slate-300">{children}</div>
-        </article>
-      </main>
-      <SiteFooter dark />
-    </div>
-  );
-}
-
-const LegalSection = ({ title, children }) => (
-  <section>
-    <h2 className="mb-2 text-lg font-bold text-white">{title}</h2>
-    <div className="space-y-3">{children}</div>
-  </section>
-);
-
-const ExternalLegalLink = ({ href, children }) => (
-  <a href={href} target="_blank" rel="noopener noreferrer" className="text-emerald-400 underline decoration-emerald-400/40 underline-offset-2 hover:text-emerald-300">
-    {children}
-  </a>
-);
-
-const ProviderDetailsImage = () => (
-  <figure className="max-w-md">
-    <img
-      src="/assets/anbieterangaben.png"
-      alt="Name und ladungsfähige Anschrift des Anbieters als Grafik"
-      width="1000"
-      height="320"
-      className="h-auto w-full rounded-lg border border-slate-700"
-    />
-    <figcaption className="mt-2 text-xs leading-5 text-slate-400">
-      Die Anbieterangaben werden zum Schutz vor einfachem automatisiertem Auslesen als Grafik dargestellt.
-    </figcaption>
-  </figure>
-);
-
-function ImpressumPage() {
-  return (
-    <LegalLayout title="Impressum">
-      <LegalSection title="Angaben gemäß § 5 DDG">
-        <p><strong className="text-white">FREILOTSE</strong></p>
-        <ProviderDetailsImage />
-      </LegalSection>
-      <LegalSection title="Kontakt">
-        <p>E-Mail: <a className="text-emerald-400 hover:text-emerald-300" href="mailto:freilotse@outlook.de">freilotse@outlook.de</a></p>
-      </LegalSection>
-      <LegalSection title="Verbraucherstreitbeilegung">
-        <p>Ich bin nicht bereit oder verpflichtet, an Streitbeilegungsverfahren vor einer Verbraucherschlichtungsstelle teilzunehmen.</p>
-      </LegalSection>
-    </LegalLayout>
-  );
-}
-
-function DatenschutzPage() {
-  return (
-    <LegalLayout title="Datenschutzerklärung">
-      <p>Stand: 22. Juli 2026</p>
-
-      <LegalSection title="1. Verantwortlicher">
-        <ProviderDetailsImage />
-        <p>E-Mail: <a className="text-emerald-400 hover:text-emerald-300" href="mailto:freilotse@outlook.de">freilotse@outlook.de</a></p>
-      </LegalSection>
-
-      <LegalSection title="2. Hosting über Netlify">
-        <p>Diese Website wird über Netlify, Inc., 101 2nd Street, San Francisco, CA 94105, USA, bereitgestellt. Beim Aufruf der Website verarbeitet Netlify technisch erforderliche Verbindungsdaten. Dazu können insbesondere IP-Adresse, Datum und Uhrzeit des Abrufs, aufgerufene Seite beziehungsweise Datei, übertragene Datenmenge, Referrer-URL, Browsertyp, Betriebssystem und Zugriffsstatus gehören.</p>
-        <p>Die Verarbeitung erfolgt, um die Website sicher, stabil und fehlerfrei auszuliefern. Rechtsgrundlage ist Art. 6 Abs. 1 lit. f DSGVO. Mein berechtigtes Interesse liegt in der sicheren und zuverlässigen Bereitstellung dieses Angebots.</p>
-        <p>Eine Verarbeitung in den USA ist möglich. Netlify gibt an, für Übermittlungen aus der EU das EU-US Data Privacy Framework und ergänzend geeignete Garantien wie Standardvertragsklauseln zu verwenden. Weitere Informationen enthält die <ExternalLegalLink href="https://www.netlify.com/privacy/">Datenschutzerklärung von Netlify</ExternalLegalLink>.</p>
-      </LegalSection>
-
-      <LegalSection title="3. Feiertags- und Schulferiendaten">
-        <p>Der Urlaubsplaner ruft Feiertagsdaten von <ExternalLegalLink href="https://feiertage-api.de/">feiertage-api.de</ExternalLegalLink> ab. Schulferiendaten werden vorrangig von <ExternalLegalLink href="https://openholidaysapi.org/">OpenHolidays API</ExternalLegalLink> und bei einem technischen Fehler oder fehlenden Daten ersatzweise von <ExternalLegalLink href="https://schulferien-api.de/">schulferien-api.de</ExternalLegalLink> direkt aus deinem Browser ab. Dabei werden technisch bedingt insbesondere deine IP-Adresse sowie das ausgewählte Jahr und das Kürzel des ausgewählten Bundeslands an den jeweiligen Anbieter übertragen.</p>
-        <p>Die Abfragen sind erforderlich, um die ausgewählten Kalenderdaten anzuzeigen und passende Planungsvorschläge zu berechnen. Rechtsgrundlage ist Art. 6 Abs. 1 lit. f DSGVO. Mein berechtigtes Interesse liegt in der korrekten und aktuellen Bereitstellung der Planungsfunktion.</p>
-      </LegalSection>
-
-      <LegalSection title="4. Technische Bibliotheken und Content Delivery Networks">
-        <p>Für die Darstellung und Ausführung der Website werden React, ReactDOM und Babel über unpkg sowie Tailwind CSS über cdn.tailwindcss.com geladen. Beim Abruf dieser Dateien wird technisch bedingt insbesondere deine IP-Adresse an die jeweiligen Anbieter übermittelt.</p>
-        <p>Die Verarbeitung dient der funktionsfähigen und einheitlichen Darstellung der Website. Rechtsgrundlage ist Art. 6 Abs. 1 lit. f DSGVO. Mein berechtigtes Interesse liegt in der technisch zuverlässigen Bereitstellung des Urlaubsplaners. Die Anbieter können Daten auch außerhalb der EU beziehungsweise des EWR verarbeiten.</p>
-      </LegalSection>
-
-      <LegalSection title="5. Planung, Freigabelinks und Kalenderexport">
-        <p>Deine Eingaben und berechneten Urlaubsdaten werden nicht an mich übermittelt und nicht dauerhaft in deinem Browser gespeichert. Die Berechnung erfolgt lokal in deinem Browser.</p>
-        <p>Wenn du die Teilen-Funktion nutzt, werden die Planungseinstellungen in einem URL-Fragment gespeichert. Dieses Fragment wird beim normalen Seitenaufruf nicht an den Webserver übertragen. Der Inhalt ist kodiert, aber nicht verschlüsselt. Jede Person mit dem Link kann die darin enthaltene Planung öffnen. Teile einen solchen Link deshalb nur mit Personen, für die diese Informationen bestimmt sind.</p>
-        <p>Beim Herunterladen einer ICS-Datei wird die Kalenderdatei lokal in deinem Browser erzeugt. Erst wenn du ausdrücklich „Google“ auswählst, wird Google Kalender geöffnet und die für den Termin erforderliche Information an Google übergeben. Dann gelten die Datenschutzbestimmungen von <ExternalLegalLink href="https://policies.google.com/privacy?hl=de">Google</ExternalLegalLink>.</p>
-      </LegalSection>
-
-      <LegalSection title="6. Kontaktaufnahme per E-Mail">
-        <p>Wenn du mich per E-Mail kontaktierst, verarbeite ich die von dir mitgeteilten Daten zur Bearbeitung deiner Anfrage und für mögliche Anschlussfragen. Rechtsgrundlage ist Art. 6 Abs. 1 lit. b DSGVO, soweit deine Anfrage auf einen Vertrag oder vorvertragliche Maßnahmen gerichtet ist; im Übrigen Art. 6 Abs. 1 lit. f DSGVO. Mein berechtigtes Interesse liegt in der Beantwortung von Anfragen.</p>
-        <p>Mein E-Mail-Postfach wird über Outlook.com von Microsoft bereitgestellt. Dabei kann Microsoft die für die Übermittlung und Speicherung der Nachricht erforderlichen Daten verarbeiten. Für Nutzer im Europäischen Wirtschaftsraum ist Microsoft Ireland Operations Limited, One Microsoft Place, South County Business Park, Leopardstown, Dublin 18, Irland, zuständig. Weitere Informationen enthält die <ExternalLegalLink href="https://privacy.microsoft.com/de-de/privacystatement">Datenschutzerklärung von Microsoft</ExternalLegalLink>.</p>
-        <p>Die Daten werden gelöscht, sobald sie für die Bearbeitung nicht mehr erforderlich sind und keine gesetzlichen Aufbewahrungspflichten entgegenstehen.</p>
-      </LegalSection>
-
-      <LegalSection title="7. Externer Link zu Ko-fi">
-        <p>Auf dieser Website befindet sich ein normaler externer Link zu meinem Profil bei Ko-fi. Beim bloßen Besuch von FREILOTSE werden dadurch keine Daten an Ko-fi übertragen. Erst wenn du den Link anklickst, verlässt du diese Website und dein Browser stellt eine Verbindung zu Ko-fi her. Dabei können personenbezogene Daten, insbesondere deine IP-Adresse und technische Verbindungsdaten, durch Ko-fi verarbeitet werden. Für die weitere Datenverarbeitung auf der Ko-fi-Website ist Ko-fi verantwortlich. Weitere Informationen findest du in der <ExternalLegalLink href="https://ko-fi.com/home/privacy">Datenschutzerklärung von Ko-fi</ExternalLegalLink>.</p>
-      </LegalSection>
-
-      <LegalSection title="8. Eingebettete YouTube-Videos">
-        <p>Auf dieser Website werden Videos der Plattform YouTube eingebunden. Anbieter ist Google Ireland Limited, Gordon House, Barrow Street, Dublin 4, Irland.</p>
-        <p>Die Website verwendet eine Zwei-Klick-Lösung. Beim bloßen Aufruf der Seite wird noch keine Verbindung zu YouTube hergestellt. Zunächst wird lediglich ein lokal gespeichertes Vorschaubild angezeigt. Erst wenn du das Video durch Anklicken aktivierst, wird der YouTube-Player über die datenschutzfreundlichere Domain youtube-nocookie.com geladen.</p>
-        <p>Dabei wird eine Verbindung zu Servern von Google hergestellt. Google erhält insbesondere deine IP-Adresse, technische Informationen zu deinem Browser und Gerät sowie die Information, welche Seite du aufgerufen hast. Wenn du gleichzeitig bei einem Google- beziehungsweise YouTube-Konto angemeldet bist, kann Google den Aufruf deinem Konto zuordnen. Beim Abspielen können außerdem Cookies oder vergleichbare Speichertechniken eingesetzt werden.</p>
-        <p>Mit dem Anklicken des Videos willigst du in die Übertragung deiner Daten an Google und eine mögliche Verarbeitung in den USA ein. Rechtsgrundlagen sind Art. 6 Abs. 1 lit. a DSGVO und, soweit Informationen auf deinem Endgerät gespeichert oder ausgelesen werden, § 25 Abs. 1 TDDDG. Die Einwilligung ist freiwillig. Ohne Aktivierung des Videos findet keine Übertragung durch den eingebetteten YouTube-Player statt.</p>
-        <p>Die Einbindung erfolgt im erweiterten Datenschutzmodus von YouTube. Nach Angaben von Google werden Aufrufe solcher Videos nicht zur Personalisierung der Nutzungserfahrung auf YouTube verwendet. Weitere Informationen findest du in der <ExternalLegalLink href="https://policies.google.com/privacy?hl=de">Datenschutzerklärung von Google</ExternalLegalLink>.</p>
-      </LegalSection>
-
-      <LegalSection title="9. Cookies, lokale Speicherung und Netlify Web Analytics">
-        <p>Der eigene Anwendungscode von FREILOTSE setzt keine Cookies ein und verwendet weder Local Storage noch Session Storage. Es findet keine personalisierte Werbung oder Bildung individueller Nutzerprofile durch FREILOTSE statt.</p>
-        <p>Diese Website verwendet Netlify Web Analytics zur statistischen Auswertung der Nutzung. Die Auswertung erfolgt serverseitig anhand der Protokolldaten des Netlify Content Delivery Networks. Ausgewertet werden insbesondere Seitenaufrufe, aufgerufene Seiten, ungefähre Herkunftsorte und die Anzahl unterschiedlicher Besucher. Zur Bestimmung unterschiedlicher Besucher vergleicht Netlify IP-Adressen innerhalb begrenzter Zeiträume.</p>
-        <p>Nach Angaben von Netlify erfolgt die Auswertung anonym, ohne Cookies, ohne clientseitiges Tracking-Skript und ohne personenbezogene Nutzerprofile. Die Verarbeitung dient der statistischen Auswertung und Verbesserung des Angebots. Rechtsgrundlage ist Art. 6 Abs. 1 lit. f DSGVO. Mein berechtigtes Interesse liegt darin, die Nutzung von FREILOTSE nachvollziehen und das Angebot technisch und inhaltlich verbessern zu können.</p>
-        <p>Da Netlify Web Analytics keine Cookies setzt und kein clientseitiges Tracking verwendet, wird hierfür derzeit kein Einwilligungsbanner eingesetzt. Weitere Informationen enthält die <ExternalLegalLink href="https://docs.netlify.com/monitor-sites/analytics/">Dokumentation zu Netlify Web Analytics</ExternalLegalLink>.</p>
-      </LegalSection>
-
-      <LegalSection title="10. Speicherdauer">
-        <p>Soweit in dieser Datenschutzerklärung keine besondere Speicherdauer genannt ist, werden personenbezogene Daten nur so lange verarbeitet, wie dies für den jeweiligen Zweck erforderlich ist. Gesetzliche Aufbewahrungsfristen bleiben unberührt.</p>
-      </LegalSection>
-
-      <LegalSection title="11. Deine Rechte">
-        <p>Du hast im Rahmen der gesetzlichen Voraussetzungen das Recht auf Auskunft, Berichtigung, Löschung, Einschränkung der Verarbeitung und Datenübertragbarkeit.</p>
-        <p>Beruht eine Verarbeitung auf Art. 6 Abs. 1 lit. f DSGVO, kannst du aus Gründen, die sich aus deiner besonderen Situation ergeben, Widerspruch gegen die Verarbeitung einlegen. Eine erteilte Einwilligung kannst du jederzeit mit Wirkung für die Zukunft widerrufen. Die Rechtmäßigkeit der Verarbeitung bis zum Widerruf bleibt davon unberührt.</p>
-        <p>Du hast außerdem das Recht, dich bei einer Datenschutzaufsichtsbehörde zu beschweren. Zuständig ist insbesondere das Bayerische Landesamt für Datenschutzaufsicht, Promenade 18, 91522 Ansbach. Weitere Informationen findest du unter <ExternalLegalLink href="https://www.lda.bayern.de/">www.lda.bayern.de</ExternalLegalLink>.</p>
-      </LegalSection>
-
-      <LegalSection title="12. Änderungen dieser Datenschutzerklärung">
-        <p>Ich passe diese Datenschutzerklärung an, wenn sich Funktionen, eingesetzte Dienste oder rechtliche Anforderungen ändern.</p>
-      </LegalSection>
-    </LegalLayout>
   );
 }
 

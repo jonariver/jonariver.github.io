@@ -29,6 +29,8 @@
 
     /* ---- Wochentags-Kürzel, wie von JS Date.getUTCDay() geliefert (0=So) ---- */
     weekdaysApiOrder: ["So", "Mo", "Di", "Mi", "Do", "Fr", "Sa"],
+    /* ---- Vollständige Wochentagsnamen, gleiche Reihenfolge/Index (0=So) ---- */
+    weekdaysFullApiOrder: ["Sonntag", "Montag", "Dienstag", "Mittwoch", "Donnerstag", "Freitag", "Samstag"],
 
     /* ---- Von der App selbst berechnete/definierte Feiertagsnamen ---- */
     holidays: {
@@ -59,6 +61,17 @@
       newYearsEve: "Silvester",
     },
 
+    /* ---- Hinweise zu Feiertagen mit rechtlichen Besonderheiten ---- */
+    holidayCaveats: {
+      // Mariä Himmelfahrt (15.8.) ist in Bayern gesetzlich nur in Gemeinden mit
+      // überwiegend katholischer Bevölkerung ein Feiertag, nicht landesweit.
+      // Weder die lokale Berechnung noch externe Feiertags-APIs bilden diese
+      // Gemeinde-Granularität ab; der Hinweis macht die Vereinfachung sichtbar.
+      assumptionDayInline: "(nicht landesweit)",
+      assumptionDayNotice:
+        "Hinweis: Mariä Himmelfahrt (15. August) gilt in Bayern gesetzlich nur in Gemeinden mit überwiegend katholischer Bevölkerung, nicht landesweit. Diese Planung berücksichtigt ihn dennoch einheitlich als Feiertag – das kann in nicht-katholisch geprägten Gemeinden abweichen.",
+    },
+
     /* ---- Von der App selbst gesetzte Fallback-Texte ---- */
     fallback: {
       schoolHolidays: "Schulferien",
@@ -80,8 +93,19 @@
     header: {
       tagline: (p) => `Feiertage · Brückentage · ${p.state}`,
       title: (p) => `Urlaubsplaner ${p.year}`,
-      freeDaysSuffix: (p) =>
-        `freie Tage am Stück aus ${p.usedVac} Urlaubs-${p.usedOt ? ` + ${p.usedOt} Überstunden-` : ""}Tagen`,
+      // total/usedVacRaw/usedOtRaw sind die ungeformatierten Zahlenwerte (für den
+      // Singular-Vergleich), usedVac/usedOt die ggf. mit Komma formatierten
+      // Anzeigewerte (siehe fmtNum) – beide werden getrennt benötigt, da ein
+      // Vergleich nie gegen den bereits formatierten String erfolgen darf.
+      freeDaysSuffix: (p) => {
+        const daysWord = p.total === 1 ? "freier Tag" : "freie Tage";
+        const periodsWord = p.periods === 1 ? "Zeitraum" : "Zeiträumen";
+        const vacWord = p.usedVacRaw === 1 ? "Urlaubstag" : "Urlaubstagen";
+        const otPart = p.usedOtRaw > 0
+          ? ` und ${p.usedOt} ${p.usedOtRaw === 1 ? "Überstundentag" : "Überstundentagen"}`
+          : "";
+        return `${daysWord} in ${p.periods} ${periodsWord} mit ${p.usedVac} ${vacWord}${otPart}`;
+      },
     },
 
     nav: {
@@ -209,21 +233,45 @@
       optionsDisabledTitle: "Ohne verfügbare Schulferiendaten wirkungslos, bis Daten vorliegen.",
     },
 
+    /* ---- Regelmäßige Arbeitstage (gemeinsam für Einfach- und Profi-Modus) ----
+       Nur für dauerhaft gleichbleibende Wochenmuster (z. B. Teilzeit Mo–Do,
+       Di–Sa) gedacht – KEINE wechselnden Schichten/rollierenden Dienstpläne,
+       keine Stunden- oder Teilzeitquoten. */
+    workingDays: {
+      question: "An welchen Tagen arbeitest du normalerweise?",
+      defaultSummary: "Montag bis Freitag",
+      changeButton: "Ändern",
+      closeButton: "Auswahl schließen",
+      // from/to bereits vollständige, übersetzte Wochentagsnamen (siehe weekdaysFullApiOrder)
+      summaryRange: (p) => `${p.from} bis ${p.to}`,
+      // days: Array bereits vollständiger, übersetzter Wochentagsnamen
+      summaryList: (p) => p.days.join(", "),
+      resetButton: "Mo–Fr wiederherstellen",
+      minOneRequired: "Mindestens ein Arbeitstag muss ausgewählt bleiben.",
+      proPanelTitle: "Regelmäßige Arbeitstage",
+      proHint: "Nicht ausgewählte Tage behandelt FREILOTSE wie regelmäßig freie Tage.",
+    },
+
     /* ---- Einfach-Modus ---- */
     simple: {
       stepperTitle: "Deine Planung – Schritt für Schritt",
       step1Question: "1 · Wie viele Urlaubstage hast du?",
       step2Question: "2 · Für welches Jahr möchtest du planen?",
       step3Question: "3 · In welchem Bundesland arbeitest du?",
-      step4Question: "4 · Wie gelten der 24.12. und 31.12. bei dir?",
+      // Neuer Schritt 4 (Arbeitstage) zwischen Bundesland und 24./31.12.-Regel;
+      // nachfolgende Schritte deshalb um eins verschoben (4->5, 5->6, 6->7).
+      // Schlüsselnamen bewusst unverändert gelassen, nur die sichtbaren
+      // Nummern in den Textwerten wurden angepasst.
+      stepWorkdaysQuestion: "4 · An welchen Tagen arbeitest du normalerweise?",
+      step4Question: "5 · Wie gelten der 24.12. und 31.12. bei dir?",
       step4Options: {
         full: "Ich muss jeweils einen ganzen Urlaubstag nehmen.",
         half: "Sie zählen jeweils als halber Urlaubstag.",
         none: "Ich habe an beiden Tagen frei und benötige keinen Urlaub.",
       },
       step4Hint: "Viele Arbeitgeber behandeln Heiligabend und Silvester unterschiedlich. Wähle einfach die Regel aus, die für dich gilt.",
-      step5Question: "5 · Wie sollen Schulferien berücksichtigt werden?",
-      step6Question: "6 · Was ist dir wichtig?",
+      step5Question: "6 · Wie sollen Schulferien berücksichtigt werden?",
+      step6Question: "7 · Was ist dir wichtig?",
       goal: {
         free: "Möglichst viele freie Tage",
         blocks: "Lange Urlaubsblöcke",
@@ -234,14 +282,26 @@
       notStartedHint: "Wähle links deine Angaben und klicke auf „Beste Planung berechnen\".",
       resultHeading: "Deine optimale Urlaubsplanung",
       freeDaysLabel: "freie Tage",
-      statHolidaysUsed: (p) => `+${p.count} Feiertage optimal genutzt`,
-      statBridgeDaysUsed: (p) => `+${p.count} Brückentage eingesetzt`,
-      statTotalFree: (p) => `${p.count} freie Tage insgesamt`,
-      summarySentence: (p) => `Mit ${p.usedVac} von ${p.totalVac} Urlaubstagen erhältst du insgesamt ${p.totalFree} freie Tage.`,
+      // count/periods sind stets ganzzahlig (keine fmtNum-Formatierung nötig),
+      // daher genügt hier ein einfacher === 1-Vergleich für Singular/Plural.
+      // Nominativ/Label-Kontext (eigenständige Kennzahl, kein Satzobjekt) -> "1 freier Tag".
+      statTotalFree: (p) =>
+        `Insgesamt ${p.count} ${p.count === 1 ? "freier Tag" : "freie Tage"} in ${p.periods} ${p.periods === 1 ? "Zeitraum" : "Zeiträumen"}`,
+      // usedVac kann durch die 24./31.12.-Regelung halbe Tage enthalten, daher
+      // getrennt formatierter Anzeigewert (count) und Rohwert (countRaw) für den
+      // Singular-Vergleich (z. B. 1 vs. 1,5 Urlaubstage).
+      statVacationDaysUsed: (p) => `Davon ${p.count} Urlaubstag${p.countRaw === 1 ? "" : "e"} eingeplant`,
+      statHolidaysUsed: (p) =>
+        p.count === 1 ? "1 Feiertag liegt innerhalb deiner Vorschläge" : `${p.count} Feiertage liegen innerhalb deiner Vorschläge`,
+      statLongestStreak: (p) => `Längster zusammenhängender Zeitraum: ${p.count} Tag${p.count === 1 ? "" : "e"}`,
+      // Akkusativ-Kontext (Satzobjekt von "erhältst") -> "1 freien Tag" (nicht
+      // "freier Tag" wie bei statTotalFree/periodFreeDaysLabel, dort Nominativ).
+      summarySentence: (p) =>
+        `Mit ${p.usedVac} von ${p.totalVac} Urlaubstagen erhältst du insgesamt ${p.totalFree} ${p.totalFree === 1 ? "freien Tag" : "freie Tage"} in ${p.periods} ${p.periods === 1 ? "Zeitraum" : "Zeiträumen"}.`,
       recommendedBlocksHeading: "Empfohlene Urlaubsblöcke",
       noSuggestions: "Keine Vorschläge gefunden – erhöhe die Anzahl deiner Urlaubstage.",
       jumpToMonthTitle: "Zum Monat im Kalender springen",
-      periodFreeDaysLabel: (p) => `${p.len} freie Tage · ${p.vac} Urlaubstag${p.vacRaw === 1 ? "" : "e"}`,
+      periodFreeDaysLabel: (p) => `${p.len} ${p.len === 1 ? "freier Tag" : "freie Tage"} · ${p.vac} Urlaubstag${p.vacRaw === 1 ? "" : "e"}`,
       showCalendar: "Kalender anzeigen",
       hideCalendar: "Kalender ausblenden",
     },
@@ -318,9 +378,12 @@
     /* ---- Kennzahlen-Kacheln ---- */
     metrics: {
       leverage: "freie Tage pro eingesetztem Tag",
-      longestStreak: "längste freie Serie (Tage)",
-      holidaysWithWeekend: "Feiertage Mo–Fr + Sa/So",
-      holidaysWorkdaysOnly: "Feiertage an Werktagen",
+      longestStreak: "Längster zusammenhängender Zeitraum (Tage)",
+      // Bewusst ohne "Mo-Fr"/"Werktage": gilt unverändert für individuelle
+      // Arbeitswochen (siehe workingDays) – "Arbeitstage" bezieht sich auf die
+      // persönlich gewählten regulären Arbeitstage, nicht auf eine feste Woche.
+      holidaysWithWeekend: "Feiertage an Arbeits- und Wochenendtagen in deinen Zeiträumen",
+      holidaysWorkdaysOnly: "Feiertage an deinen Arbeitstagen in deinen Zeiträumen",
       remaining: "übrig: Urlaub / Überstunden",
     },
 
@@ -379,6 +442,7 @@
       weekend: "Wochenende",
       manualSet: "manuell gesetzt",
       schoolHolidays: "Schulferien",
+      regularlyOff: "Regelmäßig frei",
     },
 
     footerHint: {
@@ -400,6 +464,11 @@
         rangeBetween: (p) => `${p.from}–${p.to}`,
       },
       vacationTooltip: (p) => `${p.name} in ${p.state} · ${p.start} bis ${p.end}`,
+      // Nur relevant, wenn ein tatsächliches Kalenderwochenende laut
+      // workingDays trotzdem ein persönlicher regulärer Arbeitstag ist (z. B.
+      // Dienstag–Samstag) – macht das im Tooltip explizit, weil die Zelle
+      // selbst weiterhin das gewohnte Wochenend-Styling behält.
+      personalWorkday: "regulärer Arbeitstag",
     },
 
     /* ---- Dialog: geplanten Tag entfernen/tauschen ---- */

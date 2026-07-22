@@ -5,8 +5,12 @@
 
 ## Projektüberblick
 
-Einzeldatei-App `app.jsx` (React über globale `React`/`ReactDOM`, JSX per
-Babel-Standalone im Browser – **kein Build/Bundler, kein TypeScript**).
+React-App über globale `React`/`ReactDOM`, JSX per Babel-Standalone im
+Browser – **kein Build/Bundler, kein TypeScript, keine ES-Module**. Seit dem
+Modul-Refactoring ist die Anwendung auf mehrere `<script>`-Dateien aufgeteilt
+(siehe Abschnitt „Architektur/Module" weiter unten); `app.jsx` bleibt die
+zentrale Komponentendatei (`Urlaubsplaner`, `App`) und lädt die übrigen Module
+zuletzt.
 Der gesamte Urlaubsplan ist eine **reine Ableitung**: `plan(days, cfg)` berechnet
 alles aus den Eingaben. Es gibt **keine** separaten Listen manueller/automatischer
 Tage.
@@ -20,6 +24,118 @@ Tage.
   beliebigen Tagesdauer.
 - Ein Datum kann **nicht** gleichzeitig Urlaub und Überstundenabbau sein
   (ein Map-Key → ein Wert).
+- **Regelmäßige Arbeitstage** (`workingWeekdays`, Standard Montag–Freitag)
+  bestimmen, an welchen Wochentagen überhaupt ein Urlaubstag benötigt würde –
+  siehe eigener Abschnitt „Regelmäßige Arbeitstage" weiter unten.
+
+## Architektur/Module
+
+Kein Modulsystem (kein `import`/`export`, keine ES-Module) und kein Bundler –
+jede Datei ist ein eigenes klassisches `<script>`-Tag. Da klassische
+`<script>`-Tags sich dieselbe globale lexikalische Umgebung teilen, ist jede
+Datei in eine **IIFE** gekapselt und hängt ihre öffentliche Oberfläche
+explizit an einen `window.FREILOTSE.*`-Namespace, statt eigene `const`/`let`
+auf oberster Ebene zu deklarieren (das würde bei mehrfacher Deklaration
+desselben Namens in verschiedenen Dateien sonst zu einem `SyntaxError`
+führen). `app.jsx` holt sich die benötigten Funktionen/Komponenten direkt zu
+Beginn per Kurzschreibweise zurück, z. B. `const { plan, minimalBridgeBudget }
+= window.FREILOTSE.planning;` – dadurch bleiben alle bestehenden Aufrufstellen
+innerhalb von `app.jsx` unverändert (keine Umbenennungen).
+
+### Dateien und Zuständigkeiten
+
+| Datei | Namespace | Inhalt |
+|---|---|---|
+| `locales/de.js` | `window.I18N` | Übersetzungen/Fallback-Texte, `t(key, params)` (siehe Abschnitt „Internationalisierung" unten). Muss als Erstes geladen werden. |
+| `js/planning.js` | `window.FREILOTSE.planning` | `plan()`, `minimalBridgeBudget()`. Rein deterministisch: kein React, kein DOM, kein `fetch()`, keine Abhängigkeit von `window.I18N`. |
+| `js/calendar.js` | `window.FREILOTSE.calendar` | `DAY`, `easterUTC()`, `holidayMap()`, `buildDays()`, `vacationDayMap()`. Reine Kalenderlogik ohne Netzwerkzugriff. `holidayMap`/`buildDays`/`vacationDayMap` erhalten die Übersetzungsfunktion `t` als **Parameter** (z. B. `buildDays(year, st, xmasRule, extHolidays, t, workingWeekdays)`) statt selbst auf `window.I18N` zuzugreifen. `workingWeekdays` ist optional (Fallback Montag–Freitag) – siehe Abschnitt „Regelmäßige Arbeitstage". |
+| `js/data-sources.js` | `window.FREILOTSE.dataSources` | Anbindung externer Quellen: `loadPublicHolidays(year, stateCode)` (liefert `{ status: "api"\|"lokal", holidays }`, Ersatz für den früheren feiertage-api.de-`useEffect`), `loadSchoolHolidays()`, Normalisierer `normalizeOpenHolidaysPeriod`/`normalizeSchulferienApiPeriod`. Kein React, keine Abhängigkeit von `window.I18N`. |
+| `js/share-link.js` | `window.FREILOTSE.shareLink` | Gesamte Share-Link-Logik (siehe Abschnitt „Share-Link-Funktion" unten). `validateSharePayload`/`decodeShare` erhalten bekannte Bundesland-Codes als Parameter (`knownStateCodes`) statt direkt auf `STATES` zuzugreifen. |
+| `jsx/common-components.jsx` | `window.FREILOTSE.ui` | `CollapsibleCard`, `InfoHint`. |
+| `jsx/kofi-components.jsx` | `window.FREILOTSE.ui` | `internalNavigate`, `SiteLink`, `CoffeeIcon`, `KofiFooterLink`, `KofiFloatingButton`, `SiteFooter` (Site-Chrome + Ko-fi, eng gekoppelt). |
+| `jsx/landing-page.jsx` | `window.FREILOTSE.ui` | `ExplainerVideoSection`, `LandingPage`. Nutzt `SiteFooter` aus `kofi-components.jsx`. |
+| `jsx/legal-pages.jsx` | `window.FREILOTSE.ui` | `LegalLayout`, `LegalSection`, `ExternalLegalLink`, `ProviderDetailsImage`, `ImpressumPage`, `DatenschutzPage`. Nutzt `SiteLink`/`SiteFooter` aus `kofi-components.jsx`. |
+| `app.jsx` | – (Wurzel) | `Urlaubsplaner` (zentrale Komponente, bewusst nicht weiter aufgeteilt – zu große/kritische Prop-Kette), `App` (Routing), Rendering-Helfer (`fmtNum`, `dayClass`, `dayTitle` u. Ä.), Mount (`ReactDOM.createRoot(...).render(...)`). |
+
+### Erforderliche Ladereihenfolge (siehe `index.html`)
+1. `locales/de.js`
+2. `js/planning.js`, `js/calendar.js`, `js/data-sources.js`, `js/share-link.js`
+   (Reihenfolge untereinander unkritisch, keine Abhängigkeiten untereinander)
+3. `jsx/common-components.jsx`, dann `jsx/kofi-components.jsx` (wird von den
+   folgenden beiden genutzt), dann `jsx/landing-page.jsx` und
+   `jsx/legal-pages.jsx`
+4. `app.jsx` (mountet die Anwendung, muss zuletzt laden)
+
+Bei Änderungen an einer dieser Dateien die Cache-Busting-Version in
+`index.html` (`?v=…`) hochzählen. Weiterhin **kein** Bundler, **kein**
+npm-basierter Build-Schritt – jede Datei bleibt ein direkt ladbares
+`<script>` (JS-Dateien ohne JSX regulär, JSX-Dateien über
+`type="text/babel" data-presets="react"`).
+
+## Regelmäßige Arbeitstage
+
+### Zweck und Abgrenzung
+Nutzer können festlegen, an welchen Wochentagen sie regelmäßig arbeiten (z. B.
+Montag–Freitag, Montag–Donnerstag, Dienstag–Samstag, einzelne Tage), damit
+insbesondere regelmäßige Teilzeitmodelle korrekt berechnet werden.
+**Ausdrücklich nicht** abgedeckt: wechselnde Schichten, rollierende
+Dienstpläne, wochenabhängige Arbeitszeiten, konkrete Stunden pro Tag,
+Teilzeitquoten oder halbe reguläre Arbeitstage. Für all das müsste
+`workingWeekdays` durch ein grundsätzlich anderes, wochenbezogenes Modell
+ersetzt werden – das aktuelle Format (ein einziges, dauerhaft gültiges Array
+von Wochentagen) ist dafür bewusst **nicht** vorgesehen und sollte dafür auch
+nicht zweckentfremdet werden.
+
+### Zustand und Format
+`workingWeekdays`: **ein** gemeinsamer State für Einfach- und Profi-Modus
+(wie `vac`, `st`, `blocks` usw.) – Array von Wochentags-Indizes wie
+`Date.getUTCDay()` (`0` = Sonntag … `6` = Samstag), z. B. `[1,2,3,4,5]` für
+Montag–Freitag (Standard). Reihenfolge im Array ist beliebig, wird aber beim
+Setzen/Teilen aufsteigend sortiert. Mindestens ein Eintrag ist Pflicht – die
+UI verhindert das Abwählen des letzten verbleibenden Arbeitstags (kein
+Fehlerzustand, kein leeres Array möglich). Ein Moduswechsel Einfach ↔ Profi
+liest/schreibt denselben State, die Auswahl geht dabei nie verloren.
+
+### Verwendung in `buildDays()`
+`buildDays(year, st, xmasRule, extHolidays, t, workingWeekdays)`
+(`js/calendar.js`) erzeugt pro Tag zusätzlich zu `weekend` (tatsächliches
+Kalenderwochenende, bleibt für Darstellung/echte Wochenend-Erkennung
+erhalten) das Feld `isWorkingDay` (persönlicher regulärer Arbeitstag laut
+`workingWeekdays`, unabhängig davon, ob der Wochentag ein Kalenderwochenende
+ist). Kostenregel (ersetzt die frühere feste Annahme Montag–Freitag):
+
+```js
+let cost = 1;
+if (!isWorkingDay || holiday) cost = 0;
+else if (special) cost = xmasRule === "0" ? 0 : xmasRule === "50" ? 0.5 : 1;
+```
+
+Daraus folgt automatisch – ohne separaten Sonderfall –, dass die
+24./31.12.-Regel nur an persönlichen Arbeitstagen greift; an einem
+persönlich freien 24.12./31.12. ist `cost` immer `0`. Fehlt `workingWeekdays`
+oder ist es leer, fällt `buildDays()` auf Montag–Freitag zurück (identisches
+Verhalten wie vor dieser Erweiterung). `plan()`/`minimalBridgeBudget()`
+(`js/planning.js`) bleiben **unverändert** – sie arbeiten ausschließlich mit
+den von `buildDays()` bereits korrekt berechneten `cost`-Werten und kennen
+`workingWeekdays` selbst nicht.
+
+Feiertagsbezogene Kennzahlen (`countHolidaysInPeriods()`,
+`periodWorkingDayHolidayCount`, Feiertagsbeschreibungen in `blockReason()`)
+zählen einen Feiertag nur dann als „gespart"/„genutzt", wenn er auf einen
+Tag mit `isWorkingDay === true` fällt. Die Anzeige eines Feiertags (z. B. in
+der Monatszusammenfassung) bleibt davon getrennt und richtet sich weiterhin
+nach `weekend`/der Option „Feiertage an Samstag/Sonntag einbeziehen".
+
+### Share-Link (optional, rückwärtskompatibel)
+Kompaktes, optionales Feld `ww` in `state` (z. B. `"ww": [1,2,3,4,5]`),
+verarbeitet in `js/share-link.js`. `SHARE_VERSION` bleibt unverändert – das
+Feld ist rein additiv. **Alte Links ohne `ww`** (vor dieser Erweiterung
+erzeugt) laden weiterhin einwandfrei und verwenden automatisch
+Montag–Freitag, **ohne** den bestehenden Warnhinweis auszulösen (kein
+korrigierter Zustand, sondern erwartetes Verhalten für ältere Links). Ist
+`ww` vorhanden, aber kein Array, enthält ungültige/doppelte Werte oder ist
+nach Bereinigung leer, wird auf Montag–Freitag zurückgesetzt **und** der
+bestehende Warnmechanismus (`warning: true`) ausgelöst.
 
 ## Share-Link-Funktion
 
@@ -28,15 +144,19 @@ Aktuellen Planungsstand über einen teilbaren Link weitergeben – ohne Backend,
 lauffähig auf GitHub Pages.
 
 ### Speicherort der Logik
-Alles in `app.jsx`:
-- Reine Helfer (vor der Komponente, Abschnitt „Teilen: versionierter Share-Link"):
-  `bytesToB64url` / `b64urlToBytes`, `isValidMd`, `buildSharePayload`,
-  `encodeShare`, `decodeShare`, `readSharedPlan` sowie die Konstanten
-  `SHARE_VERSION`, `SHARE_MAX_URL`, `SHARE_MAX_DECODED`, `SHARE_MAX_OVERRIDES`,
-  `SHARE_MAX_BLOCKS`.
-- In der Komponente: `buildShareUrl`, `handleShare`, `copyFromModal`, `showToast`,
-  ein Mount-`useEffect` (Lade-Hinweis + Fragment-Bereinigung), Header-Button
-  „Planung teilen", Fallback-Kopier-Dialog (`copyUrl`) und Toast (`toast`).
+- Reine Helfer in `js/share-link.js` (Namespace `window.FREILOTSE.shareLink`,
+  siehe Abschnitt „Architektur/Module" oben): `bytesToB64url` / `b64urlToBytes`,
+  `isValidMd`, `buildSharePayload`, `encodePlain`, `decodeShare`,
+  `validateSharePayload`, `readShareFragment`, `deflateToB64url`/
+  `inflateFromB64url`, `getHashParam` sowie die Konstanten `SHARE_VERSION`,
+  `SHARE_MAX_URL`, `SHARE_MAX_DECODED`, `SHARE_MAX_OVERRIDES`,
+  `SHARE_MAX_BLOCKS`, `HAS_COMPRESSION`. `validateSharePayload`/`decodeShare`
+  erhalten bekannte Bundesland-Codes als Parameter, statt selbst auf `STATES`
+  zuzugreifen – `app.jsx` übergibt dafür sein eigenes `STATE_CODES`.
+- In der Komponente (`app.jsx`, `Urlaubsplaner`): `buildShareUrl`,
+  `handleShare`, `copyFromModal`, `showToast`, ein Mount-`useEffect`
+  (Lade-Hinweis + Fragment-Bereinigung), Header-Button „Planung teilen",
+  Fallback-Kopier-Dialog (`copyUrl`) und Toast (`toast`).
 
 ### Datenformat (Version 1)
 Kodierung: `base64url(UTF-8(JSON))` im **URL-Fragment**: `…/#plan=<code>`.
@@ -54,10 +174,15 @@ Es werden **nur Eingaben** gespeichert (kompakte Kurzfelder):
     "sh": "avoid",                                            // Schulferien-Präferenz
     "av": "", "ao": "0", "sf": "vac", "af": 0, "wh": 1,       // Auto-Budget/-Optionen, showWeekendHolidays
     "b": [["16","","" ],["9","",""]],                         // Wunschblöcke [len, month, ot]
-    "ov": { "v": ["4-14"], "o": ["5-4"], "n": ["6-1"] }       // manuelle Tage: vac / ot / none (Keys "m-d")
+    "ov": { "v": ["4-14"], "o": ["5-4"], "n": ["6-1"] },      // manuelle Tage: vac / ot / none (Keys "m-d")
+    "ww": [1, 2, 3, 4, 5]                                     // optional: regelmäßige Arbeitstage, siehe unten
   }
 }
 ```
+
+`ww` (regelmäßige Arbeitstage) ist **optional** und rückwärtskompatibel –
+siehe eigener Abschnitt „Regelmäßige Arbeitstage" oben für Format,
+Validierung und das Verhalten bei alten Links ohne dieses Feld.
 
 Bewusst **nicht** gespeichert (weil ableitbar bzw. UI-lokal): Feiertage,
 Schulferien, `days`, das Planungsergebnis, sowie `dark`, `panels`, `clickMode`,
@@ -158,9 +283,9 @@ bewusst nicht persistiert, da ableitbar und rein UI-lokal).
 - Beide Antworten werden **unmittelbar nach dem Abruf** auf ein gemeinsames
   internes Format normalisiert: `{ start, end, name, source }`
   (`normalizeOpenHolidaysPeriod` / `normalizeSchulferienApiPeriod` in
-  `app.jsx`, vor der Komponente). Die bestehende `vacationDayMap()` verarbeitet
-  ausschließlich diese normalisierten Objekte und musste inhaltlich nicht
-  geändert werden.
+  `js/data-sources.js`, Namespace `window.FREILOTSE.dataSources`). Die
+  bestehende `vacationDayMap()` (`js/calendar.js`) verarbeitet ausschließlich
+  diese normalisierten Objekte und musste inhaltlich nicht geändert werden.
 
 ### Status, Cache und Race Conditions
 `vacStatus` unterscheidet fünf Zustände: `"laedt"` (wird geladen),
