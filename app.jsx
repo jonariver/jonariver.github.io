@@ -802,10 +802,14 @@ function ExplainerVideoSection({ dark, cardCls }) {
   // Vorschaubild zeigen statt den zuvor gestarteten iframe der anderen Variante.
   useEffect(() => { setPlayed(false); }, [isMobile]);
 
+  // Vorschaubilder liegen lokal im Projekt (assets/video/), damit vor dem Klick
+  // keine Verbindung zu YouTube/Google entsteht (siehe Datenschutzerklärung,
+  // Abschnitt "Eingebettete YouTube-Videos").
   const video = isMobile
-    ? { id: "Rw0EefsI4sk", ratio: "aspect-[9/16]", widthCls: "max-w-[320px] mx-auto", title: t("landing.video.mobileIframeTitle") }
-    : { id: "N1KzGRCX7XA", ratio: "aspect-[16/9]", widthCls: "", title: t("landing.video.desktopIframeTitle") };
-  const thumbnailUrl = `https://i.ytimg.com/vi/${video.id}/hqdefault.jpg`;
+    ? { id: "Rw0EefsI4sk", ratio: "aspect-[9/16]", widthCls: "max-w-[320px] mx-auto",
+        thumbnail: "./assets/video/explainer-mobile-Rw0EefsI4sk.jpg", title: t("landing.video.mobileIframeTitle") }
+    : { id: "N1KzGRCX7XA", ratio: "aspect-[16/9]", widthCls: "",
+        thumbnail: "./assets/video/explainer-desktop-N1KzGRCX7XA.jpg", title: t("landing.video.desktopIframeTitle") };
   const embedUrl = `https://www.youtube-nocookie.com/embed/${video.id}?autoplay=1&playsinline=1`;
 
   return (
@@ -830,7 +834,7 @@ function ExplainerVideoSection({ dark, cardCls }) {
             <button type="button" onClick={() => setPlayed(true)}
               aria-label={t("landing.video.playButtonLabel")}
               className="group absolute inset-0 h-full w-full cursor-pointer focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-inset">
-              <img src={thumbnailUrl} alt={t("landing.video.thumbnailAlt")}
+              <img src={video.thumbnail} alt={t("landing.video.thumbnailAlt")}
                 className="h-full w-full object-cover" loading="lazy" />
               <span className="absolute inset-0 flex items-center justify-center bg-black/20 transition-colors group-hover:bg-black/30">
                 <span className="flex h-14 w-14 sm:h-16 sm:w-16 items-center justify-center rounded-full bg-white/90 shadow-lg transition-transform group-hover:scale-105">
@@ -2880,20 +2884,32 @@ function DatenschutzPage() {
         <p>Auf dieser Website befindet sich ein normaler externer Link zu meinem Profil bei Ko-fi. Beim bloßen Besuch von FREILOTSE werden dadurch keine Daten an Ko-fi übertragen. Erst wenn du den Link anklickst, verlässt du diese Website und dein Browser stellt eine Verbindung zu Ko-fi her. Dabei können personenbezogene Daten, insbesondere deine IP-Adresse und technische Verbindungsdaten, durch Ko-fi verarbeitet werden. Für die weitere Datenverarbeitung auf der Ko-fi-Website ist Ko-fi verantwortlich. Weitere Informationen findest du in der <ExternalLegalLink href="https://ko-fi.com/home/privacy">Datenschutzerklärung von Ko-fi</ExternalLegalLink>.</p>
       </LegalSection>
 
-      <LegalSection title="8. Cookies, lokale Speicherung und Reichweitenmessung">
-        <p>Der eigene Anwendungscode von FREILOTSE setzt keine Cookies ein und verwendet weder Local Storage noch Session Storage. Es findet keine Reichweitenmessung, Profilbildung oder personalisierte Werbung statt. Netlify Web Analytics ist nicht aktiviert. Daher wird derzeit kein Einwilligungsbanner eingesetzt.</p>
+      <LegalSection title="8. Eingebettete YouTube-Videos">
+        <p>Auf dieser Website werden Videos der Plattform YouTube eingebunden. Anbieter ist Google Ireland Limited, Gordon House, Barrow Street, Dublin 4, Irland.</p>
+        <p>Die Website verwendet eine Zwei-Klick-Lösung. Beim bloßen Aufruf der Seite wird noch keine Verbindung zu YouTube hergestellt. Zunächst wird lediglich ein lokal gespeichertes Vorschaubild angezeigt. Erst wenn du das Video durch Anklicken aktivierst, wird der YouTube-Player über die datenschutzfreundlichere Domain youtube-nocookie.com geladen.</p>
+        <p>Dabei wird eine Verbindung zu Servern von Google hergestellt. Google erhält insbesondere deine IP-Adresse, technische Informationen zu deinem Browser und Gerät sowie die Information, welche Seite du aufgerufen hast. Wenn du gleichzeitig bei einem Google- beziehungsweise YouTube-Konto angemeldet bist, kann Google den Aufruf deinem Konto zuordnen. Beim Abspielen können außerdem Cookies oder vergleichbare Speichertechniken eingesetzt werden.</p>
+        <p>Mit dem Anklicken des Videos willigst du in die Übertragung deiner Daten an Google und eine mögliche Verarbeitung in den USA ein. Rechtsgrundlagen sind Art. 6 Abs. 1 lit. a DSGVO und, soweit Informationen auf deinem Endgerät gespeichert oder ausgelesen werden, § 25 Abs. 1 TDDDG. Die Einwilligung ist freiwillig. Ohne Aktivierung des Videos findet keine Übertragung durch den eingebetteten YouTube-Player statt.</p>
+        <p>Die Einbindung erfolgt im erweiterten Datenschutzmodus von YouTube. Nach Angaben von Google werden Aufrufe solcher Videos nicht zur Personalisierung der Nutzungserfahrung auf YouTube verwendet. Weitere Informationen findest du in der <ExternalLegalLink href="https://policies.google.com/privacy?hl=de">Datenschutzerklärung von Google</ExternalLegalLink>.</p>
       </LegalSection>
 
-      <LegalSection title="9. Speicherdauer">
+      <LegalSection title="9. Cookies, lokale Speicherung und Netlify Web Analytics">
+        <p>Der eigene Anwendungscode von FREILOTSE setzt keine Cookies ein und verwendet weder Local Storage noch Session Storage. Es findet keine personalisierte Werbung oder Bildung individueller Nutzerprofile durch FREILOTSE statt.</p>
+        <p>Diese Website verwendet Netlify Web Analytics zur statistischen Auswertung der Nutzung. Die Auswertung erfolgt serverseitig anhand der Protokolldaten des Netlify Content Delivery Networks. Ausgewertet werden insbesondere Seitenaufrufe, aufgerufene Seiten, ungefähre Herkunftsorte und die Anzahl unterschiedlicher Besucher. Zur Bestimmung unterschiedlicher Besucher vergleicht Netlify IP-Adressen innerhalb begrenzter Zeiträume.</p>
+        <p>Nach Angaben von Netlify erfolgt die Auswertung anonym, ohne Cookies, ohne clientseitiges Tracking-Skript und ohne personenbezogene Nutzerprofile. Die Verarbeitung dient der statistischen Auswertung und Verbesserung des Angebots. Rechtsgrundlage ist Art. 6 Abs. 1 lit. f DSGVO. Mein berechtigtes Interesse liegt darin, die Nutzung von FREILOTSE nachvollziehen und das Angebot technisch und inhaltlich verbessern zu können.</p>
+        <p>Da Netlify Web Analytics keine Cookies setzt und kein clientseitiges Tracking verwendet, wird hierfür derzeit kein Einwilligungsbanner eingesetzt. Weitere Informationen enthält die <ExternalLegalLink href="https://docs.netlify.com/monitor-sites/analytics/">Dokumentation zu Netlify Web Analytics</ExternalLegalLink>.</p>
+      </LegalSection>
+
+      <LegalSection title="10. Speicherdauer">
         <p>Soweit in dieser Datenschutzerklärung keine besondere Speicherdauer genannt ist, werden personenbezogene Daten nur so lange verarbeitet, wie dies für den jeweiligen Zweck erforderlich ist. Gesetzliche Aufbewahrungsfristen bleiben unberührt.</p>
       </LegalSection>
 
-      <LegalSection title="10. Deine Rechte">
-        <p>Du hast im Rahmen der gesetzlichen Voraussetzungen das Recht auf Auskunft, Berichtigung, Löschung, Einschränkung der Verarbeitung und Datenübertragbarkeit. Beruht eine Verarbeitung auf Art. 6 Abs. 1 lit. f DSGVO, kannst du aus Gründen, die sich aus deiner besonderen Situation ergeben, Widerspruch gegen die Verarbeitung einlegen.</p>
-        <p>Du hast außerdem das Recht, dich bei einer Datenschutzaufsichtsbehörde zu beschweren. Zuständig ist insbesondere das Bayerische Landesamt für Datenschutzaufsicht, Promenade 18, 91522 Ansbach. Weitere Informationen: <ExternalLegalLink href="https://www.lda.bayern.de/">www.lda.bayern.de</ExternalLegalLink>.</p>
+      <LegalSection title="11. Deine Rechte">
+        <p>Du hast im Rahmen der gesetzlichen Voraussetzungen das Recht auf Auskunft, Berichtigung, Löschung, Einschränkung der Verarbeitung und Datenübertragbarkeit.</p>
+        <p>Beruht eine Verarbeitung auf Art. 6 Abs. 1 lit. f DSGVO, kannst du aus Gründen, die sich aus deiner besonderen Situation ergeben, Widerspruch gegen die Verarbeitung einlegen. Eine erteilte Einwilligung kannst du jederzeit mit Wirkung für die Zukunft widerrufen. Die Rechtmäßigkeit der Verarbeitung bis zum Widerruf bleibt davon unberührt.</p>
+        <p>Du hast außerdem das Recht, dich bei einer Datenschutzaufsichtsbehörde zu beschweren. Zuständig ist insbesondere das Bayerische Landesamt für Datenschutzaufsicht, Promenade 18, 91522 Ansbach. Weitere Informationen findest du unter <ExternalLegalLink href="https://www.lda.bayern.de/">www.lda.bayern.de</ExternalLegalLink>.</p>
       </LegalSection>
 
-      <LegalSection title="11. Änderungen dieser Datenschutzerklärung">
+      <LegalSection title="12. Änderungen dieser Datenschutzerklärung">
         <p>Ich passe diese Datenschutzerklärung an, wenn sich Funktionen, eingesetzte Dienste oder rechtliche Anforderungen ändern.</p>
       </LegalSection>
     </LegalLayout>
