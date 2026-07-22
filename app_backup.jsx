@@ -906,9 +906,6 @@ function LandingPage({ dark, setDark, cardCls, onStartSimple, onStartPro }) {
           ))}
         </section>
       </main>
-
-      {/* Einheitlicher Seitenabschluss – auch auf der Landingpage */}
-      <SiteFooter dark={dark} />
     </>
   );
 }
