@@ -988,43 +988,24 @@ function Urlaubsplaner() {
   const [scrollTarget, setScrollTarget] = useState(null);
   const monthRefs = useRef([]); // DOM-Referenzen der 12 Monats-Container (Index = Monat 0-basiert)
   const highlightTimerRef = useRef(null);
-  // Eingeklappte Bereiche pro Gerät merken; Standard: mobil nur "Allgemein" offen
+  // Eingeklappte Bereiche gelten nur für die aktuelle Sitzung im React-State;
+  // Standard: mobil nur "Allgemein" offen. Keine Browser-Persistenz.
   const [panels, setPanels] = useState(() => {
-    try {
-      const saved = localStorage.getItem("urlaubsplaner-panels");
-      if (saved) return JSON.parse(saved);
-    } catch (e) { /* z. B. Vorschau-Umgebungen ohne Local Storage */ }
     const mobile = typeof window !== "undefined" && window.innerWidth < 768;
     return { allgemein: true, regelung: !mobile, auto: !mobile, bloecke: !mobile };
   });
   const togglePanel = (key) => {
-    setPanels((prev) => {
-      const next = { ...prev, [key]: !prev[key] };
-      try { localStorage.setItem("urlaubsplaner-panels", JSON.stringify(next)); } catch (e) {}
-      return next;
-    });
+    setPanels((prev) => ({ ...prev, [key]: !prev[key] }));
   };
 
   // Überstunden-Rechner (nur Profi-Modus): rechnet Stunden in Überstundentage
   // um (Stunden ÷ Stunden pro Arbeitstag). Rein lokale UI-Hilfe – beeinflusst
   // "ot" (Überstundenabbau in Tagen) erst, wenn "übernehmen" geklickt wird.
-  // Eingegebene Überstunden sind transient; nur "Stunden pro Arbeitstag" wird
-  // dauerhaft gespeichert (Standard: 8), damit sie beim nächsten Besuch
-  // vorausgefüllt ist.
+  // Alle Werte sind transient und werden nicht im Browser gespeichert.
   const [showOtCalc, setShowOtCalc] = useState(false);
   const [otCalcHours, setOtCalcHours] = useState("");
-  const [otCalcHoursPerDay, setOtCalcHoursPerDay] = useState(() => {
-    try {
-      const saved = localStorage.getItem("urlaubsplaner-ot-hours-per-day");
-      const n = parseFloat(String(saved).replace(",", "."));
-      if (Number.isFinite(n) && n > 0) return saved;
-    } catch (e) { /* z. B. Vorschau-Umgebungen ohne Local Storage */ }
-    return "8";
-  });
-  const updateOtCalcHoursPerDay = (v) => {
-    setOtCalcHoursPerDay(v);
-    try { localStorage.setItem("urlaubsplaner-ot-hours-per-day", v); } catch (e) {}
-  };
+  const [otCalcHoursPerDay, setOtCalcHoursPerDay] = useState("8");
+  const updateOtCalcHoursPerDay = setOtCalcHoursPerDay;
   // Bewusst kein Fallback wie bei num(): negative Eingaben sollen hier als
   // ungültig erkannt werden statt still auf 0 zu fallen.
   const parseLooseNumber = (v) => (v === "" || v == null ? NaN : parseFloat(String(v).replace(",", ".")));
@@ -2453,6 +2434,8 @@ function Urlaubsplaner() {
         )}
       </main>
 
+      <SiteFooter dark={dark} />
+
       {/* Dialog: geplanten Tag entfernen oder tauschen */}
       {dialogDay !== null && result.sel[dialogDay] && (
         <div className={`fixed inset-0 z-50 flex items-center justify-center p-4 ${dark ? "bg-black/60" : "bg-slate-900/40"}`}
@@ -2530,4 +2513,268 @@ function Urlaubsplaner() {
   );
 }
 
-ReactDOM.createRoot(document.getElementById("root")).render(<Urlaubsplaner />);
+/* Rechtliche Seiten + Navigation                                      */
+/* ------------------------------------------------------------------ */
+
+function internalNavigate(event, path) {
+  if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+  event.preventDefault();
+  window.history.pushState(null, "", path);
+  window.dispatchEvent(new PopStateEvent("popstate"));
+  window.scrollTo({ top: 0, behavior: "auto" });
+}
+
+function SiteLink({ to, children, className = "" }) {
+  return <a href={to} onClick={(event) => internalNavigate(event, to)} className={className}>{children}</a>;
+}
+
+const COFFEE_URL = "https://buymeacoffee.com/freilotse";
+const COFFEE_ARIA_LABEL = "FREILOTSE mit einem Kaffee unterstützen";
+
+function CoffeeIcon({ className = "" }) {
+  return (
+    <svg aria-hidden="true" focusable="false" viewBox="0 0 24 24" width="16" height="16"
+      className={className} fill="none" stroke="currentColor" strokeWidth="2"
+      strokeLinecap="round" strokeLinejoin="round">
+      <path d="M4 8h12a1 1 0 0 1 1 1v5a5 5 0 0 1-5 5H8a5 5 0 0 1-5-5V9a1 1 0 0 1 1-1Z" />
+      <path d="M17 10h1a3 3 0 0 1 0 6h-1" />
+      <path d="M8 2.5c-.3.8-1 1-1 2s.7 1.2 1 2" />
+      <path d="M12 2.5c-.3.8-1 1-1 2s.7 1.2 1 2" />
+    </svg>
+  );
+}
+
+function CoffeeFooterLink({ dark }) {
+  return (
+    <a href={COFFEE_URL} target="_blank" rel="noopener noreferrer"
+      className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 font-semibold transition-colors focus:outline-none focus:ring-2 focus:ring-emerald-500 ${
+        dark ? "bg-emerald-900/40 text-emerald-300 hover:bg-emerald-900/60" : "bg-emerald-50 text-emerald-700 hover:bg-emerald-100"
+      }`}>
+      <CoffeeIcon />
+      FREILOTSE unterstützen
+    </a>
+  );
+}
+
+function CoffeeFloatingButton() {
+  const [expanded, setExpanded] = useState(false);
+  const canHoverRef = useRef(false);
+  useEffect(() => {
+    canHoverRef.current = typeof window.matchMedia === "function"
+      && window.matchMedia("(hover: hover) and (pointer: fine)").matches;
+  }, []);
+  return (
+    <>
+      <style>{`
+        .coffee-fab { position: fixed; right: 0; top: 50%; transform: translateY(-50%); }
+        @media (max-width: 639px) {
+          .coffee-fab { top: auto; transform: none; bottom: max(1.25rem, env(safe-area-inset-bottom)); }
+        }
+        .coffee-fab-label {
+          display: inline-block; max-width: 0; margin-left: 0; opacity: 0; overflow: hidden; white-space: nowrap;
+          transition: max-width .3s ease, opacity .25s ease, margin-left .3s ease;
+        }
+        .coffee-fab-label.is-expanded { max-width: 220px; opacity: 1; margin-left: .5rem; }
+        @media (prefers-reduced-motion: reduce) {
+          .coffee-fab-label { transition: none; }
+        }
+      `}</style>
+      <a href={COFFEE_URL} target="_blank" rel="noopener noreferrer" aria-label={COFFEE_ARIA_LABEL}
+        onMouseEnter={() => { if (canHoverRef.current) setExpanded(true); }}
+        onMouseLeave={() => { if (canHoverRef.current) setExpanded(false); }}
+        onFocus={() => setExpanded(true)}
+        onBlur={() => setExpanded(false)}
+        className="coffee-fab z-30 flex items-center overflow-hidden rounded-l-full border border-r-0 border-emerald-400/30 bg-slate-900 py-3 pl-3 pr-3 text-white shadow-lg hover:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-emerald-500">
+        <CoffeeIcon className="shrink-0 text-emerald-400" />
+        <span className={`coffee-fab-label text-sm font-semibold${expanded ? " is-expanded" : ""}`}>
+          Supporte mich mit einem Kaffee
+        </span>
+      </a>
+    </>
+  );
+}
+
+function SiteFooter({ dark = true }) {
+  const muted = dark ? "text-slate-400" : "text-slate-500";
+  const hover = dark ? "hover:text-white" : "hover:text-slate-900";
+  return (
+    <footer className={`border-t ${dark ? "border-slate-800 bg-slate-950" : "border-slate-200 bg-white"}`}>
+      <div className={`mx-auto flex max-w-6xl flex-col gap-3 px-4 py-6 text-xs sm:flex-row sm:items-center sm:justify-between ${muted}`}>
+        <p>© {new Date().getFullYear()} FREILOTSE</p>
+        <nav aria-label="Rechtliches und Unterstützung" className="flex flex-wrap items-center gap-x-4 gap-y-2">
+          <SiteLink to="/impressum" className={hover}>Impressum</SiteLink>
+          <SiteLink to="/datenschutz" className={hover}>Datenschutz</SiteLink>
+          <CoffeeFooterLink dark={dark} />
+        </nav>
+      </div>
+    </footer>
+  );
+}
+
+function LegalLayout({ title, children }) {
+  useEffect(() => {
+    let robots = document.querySelector('meta[name="robots"]');
+    const created = !robots;
+    const previousContent = robots?.getAttribute("content");
+
+    if (!robots) {
+      robots = document.createElement("meta");
+      robots.setAttribute("name", "robots");
+      document.head.appendChild(robots);
+    }
+    robots.setAttribute("content", "noindex, follow, noarchive");
+
+    return () => {
+      if (created) robots.remove();
+      else if (previousContent === null) robots.removeAttribute("content");
+      else robots.setAttribute("content", previousContent);
+    };
+  }, []);
+
+  return (
+    <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col">
+      <header className="border-b border-slate-800 bg-slate-900">
+        <div className="mx-auto flex max-w-3xl items-center justify-between gap-4 px-4 py-5">
+          <SiteLink to="/" className="font-bold tracking-tight text-white hover:text-emerald-400">FREILOTSE</SiteLink>
+          <SiteLink to="/" className="text-sm text-slate-300 hover:text-white">Zum Urlaubsplaner</SiteLink>
+        </div>
+      </header>
+      <main className="mx-auto w-full max-w-3xl flex-1 px-4 py-10">
+        <article className="rounded-xl border border-slate-800 bg-slate-900 p-5 shadow-sm sm:p-8">
+          <h1 className="mb-8 text-3xl font-bold tracking-tight">{title}</h1>
+          <div className="space-y-7 text-sm leading-7 text-slate-300">{children}</div>
+        </article>
+      </main>
+      <SiteFooter dark />
+    </div>
+  );
+}
+
+const LegalSection = ({ title, children }) => (
+  <section>
+    <h2 className="mb-2 text-lg font-bold text-white">{title}</h2>
+    <div className="space-y-3">{children}</div>
+  </section>
+);
+
+const ExternalLegalLink = ({ href, children }) => (
+  <a href={href} target="_blank" rel="noopener noreferrer" className="text-emerald-400 underline decoration-emerald-400/40 underline-offset-2 hover:text-emerald-300">
+    {children}
+  </a>
+);
+
+const ProviderDetailsImage = () => (
+  <figure className="max-w-md">
+    <img
+      src="/assets/anbieterangaben.png"
+      alt="Name und ladungsfähige Anschrift des Anbieters als Grafik"
+      width="1000"
+      height="320"
+      className="h-auto w-full rounded-lg border border-slate-700"
+    />
+    <figcaption className="mt-2 text-xs leading-5 text-slate-400">
+      Die Anbieterangaben werden zum Schutz vor einfachem automatisiertem Auslesen als Grafik dargestellt.
+    </figcaption>
+  </figure>
+);
+
+function ImpressumPage() {
+  return (
+    <LegalLayout title="Impressum">
+      <LegalSection title="Angaben gemäß § 5 DDG">
+        <p><strong className="text-white">FREILOTSE</strong></p>
+        <ProviderDetailsImage />
+      </LegalSection>
+      <LegalSection title="Kontakt">
+        <p>E-Mail: <a className="text-emerald-400 hover:text-emerald-300" href="mailto:freilotse@outlook.de">freilotse@outlook.de</a></p>
+      </LegalSection>
+      <LegalSection title="Verbraucherstreitbeilegung">
+        <p>Ich bin nicht bereit oder verpflichtet, an Streitbeilegungsverfahren vor einer Verbraucherschlichtungsstelle teilzunehmen.</p>
+      </LegalSection>
+    </LegalLayout>
+  );
+}
+
+function DatenschutzPage() {
+  return (
+    <LegalLayout title="Datenschutzerklärung">
+      <p>Stand: 22. Juli 2026</p>
+
+      <LegalSection title="1. Verantwortlicher">
+        <ProviderDetailsImage />
+        <p>E-Mail: <a className="text-emerald-400 hover:text-emerald-300" href="mailto:freilotse@outlook.de">freilotse@outlook.de</a></p>
+      </LegalSection>
+
+      <LegalSection title="2. Hosting über Netlify">
+        <p>Diese Website wird über Netlify, Inc., 101 2nd Street, San Francisco, CA 94105, USA, bereitgestellt. Beim Aufruf der Website verarbeitet Netlify technisch erforderliche Verbindungsdaten. Dazu können insbesondere IP-Adresse, Datum und Uhrzeit des Abrufs, aufgerufene Seite beziehungsweise Datei, übertragene Datenmenge, Referrer-URL, Browsertyp, Betriebssystem und Zugriffsstatus gehören.</p>
+        <p>Die Verarbeitung erfolgt, um die Website sicher, stabil und fehlerfrei auszuliefern. Rechtsgrundlage ist Art. 6 Abs. 1 lit. f DSGVO. Mein berechtigtes Interesse liegt in der sicheren und zuverlässigen Bereitstellung dieses Angebots.</p>
+        <p>Eine Verarbeitung in den USA ist möglich. Netlify gibt an, für Übermittlungen aus der EU das EU-US Data Privacy Framework und ergänzend geeignete Garantien wie Standardvertragsklauseln zu verwenden. Weitere Informationen enthält die <ExternalLegalLink href="https://www.netlify.com/privacy/">Datenschutzerklärung von Netlify</ExternalLegalLink>.</p>
+      </LegalSection>
+
+      <LegalSection title="3. Feiertags- und Schulferiendaten">
+        <p>Der Urlaubsplaner ruft Feiertagsdaten von <ExternalLegalLink href="https://feiertage-api.de/">feiertage-api.de</ExternalLegalLink> ab. Schulferiendaten werden vorrangig von <ExternalLegalLink href="https://openholidaysapi.org/">OpenHolidays API</ExternalLegalLink> und bei einem technischen Fehler oder fehlenden Daten ersatzweise von <ExternalLegalLink href="https://schulferien-api.de/">schulferien-api.de</ExternalLegalLink> direkt aus deinem Browser ab. Dabei werden technisch bedingt insbesondere deine IP-Adresse sowie das ausgewählte Jahr und das Kürzel des ausgewählten Bundeslands an den jeweiligen Anbieter übertragen.</p>
+        <p>Die Abfragen sind erforderlich, um die ausgewählten Kalenderdaten anzuzeigen und passende Planungsvorschläge zu berechnen. Rechtsgrundlage ist Art. 6 Abs. 1 lit. f DSGVO. Mein berechtigtes Interesse liegt in der korrekten und aktuellen Bereitstellung der Planungsfunktion.</p>
+      </LegalSection>
+
+      <LegalSection title="4. Technische Bibliotheken und Content Delivery Networks">
+        <p>Für die Darstellung und Ausführung der Website werden React, ReactDOM und Babel über unpkg sowie Tailwind CSS über cdn.tailwindcss.com geladen. Beim Abruf dieser Dateien wird technisch bedingt insbesondere deine IP-Adresse an die jeweiligen Anbieter übermittelt.</p>
+        <p>Die Verarbeitung dient der funktionsfähigen und einheitlichen Darstellung der Website. Rechtsgrundlage ist Art. 6 Abs. 1 lit. f DSGVO. Mein berechtigtes Interesse liegt in der technisch zuverlässigen Bereitstellung des Urlaubsplaners. Die Anbieter können Daten auch außerhalb der EU beziehungsweise des EWR verarbeiten.</p>
+      </LegalSection>
+
+      <LegalSection title="5. Planung, Freigabelinks und Kalenderexport">
+        <p>Deine Eingaben und berechneten Urlaubsdaten werden nicht an mich übermittelt und nicht dauerhaft in deinem Browser gespeichert. Die Berechnung erfolgt lokal in deinem Browser.</p>
+        <p>Wenn du die Teilen-Funktion nutzt, werden die Planungseinstellungen in einem URL-Fragment gespeichert. Dieses Fragment wird beim normalen Seitenaufruf nicht an den Webserver übertragen. Der Inhalt ist kodiert, aber nicht verschlüsselt. Jede Person mit dem Link kann die darin enthaltene Planung öffnen. Teile einen solchen Link deshalb nur mit Personen, für die diese Informationen bestimmt sind.</p>
+        <p>Beim Herunterladen einer ICS-Datei wird die Kalenderdatei lokal in deinem Browser erzeugt. Erst wenn du ausdrücklich „Google“ auswählst, wird Google Kalender geöffnet und die für den Termin erforderliche Information an Google übergeben. Dann gelten die Datenschutzbestimmungen von <ExternalLegalLink href="https://policies.google.com/privacy?hl=de">Google</ExternalLegalLink>.</p>
+      </LegalSection>
+
+      <LegalSection title="6. Kontaktaufnahme per E-Mail">
+        <p>Wenn du mich per E-Mail kontaktierst, verarbeite ich die von dir mitgeteilten Daten zur Bearbeitung deiner Anfrage und für mögliche Anschlussfragen. Rechtsgrundlage ist Art. 6 Abs. 1 lit. b DSGVO, soweit deine Anfrage auf einen Vertrag oder vorvertragliche Maßnahmen gerichtet ist; im Übrigen Art. 6 Abs. 1 lit. f DSGVO. Mein berechtigtes Interesse liegt in der Beantwortung von Anfragen.</p>
+        <p>Mein E-Mail-Postfach wird über Outlook.com von Microsoft bereitgestellt. Dabei kann Microsoft die für die Übermittlung und Speicherung der Nachricht erforderlichen Daten verarbeiten. Für Nutzer im Europäischen Wirtschaftsraum ist Microsoft Ireland Operations Limited, One Microsoft Place, South County Business Park, Leopardstown, Dublin 18, Irland, zuständig. Weitere Informationen enthält die <ExternalLegalLink href="https://privacy.microsoft.com/de-de/privacystatement">Datenschutzerklärung von Microsoft</ExternalLegalLink>.</p>
+        <p>Die Daten werden gelöscht, sobald sie für die Bearbeitung nicht mehr erforderlich sind und keine gesetzlichen Aufbewahrungspflichten entgegenstehen.</p>
+      </LegalSection>
+
+      <LegalSection title="7. Externer Link zu Buy Me a Coffee">
+        <p>Auf der Website befindet sich ein normaler externer Link zu meinem Profil bei Buy Me a Coffee. Beim bloßen Besuch von FREILOTSE werden dadurch keine Daten an Buy Me a Coffee übertragen. Erst wenn du den Link anklickst, verlässt du diese Website und dein Browser stellt eine Verbindung zu Buy Me a Coffee her. Für die dortige Verarbeitung ist der Betreiber von Buy Me a Coffee verantwortlich. Weitere Informationen findest du in der <ExternalLegalLink href="https://www.buymeacoffee.com/privacy-policy">Datenschutzerklärung von Buy Me a Coffee</ExternalLegalLink>.</p>
+      </LegalSection>
+
+      <LegalSection title="8. Cookies, lokale Speicherung und Reichweitenmessung">
+        <p>Der eigene Anwendungscode von FREILOTSE setzt keine Cookies ein und verwendet weder Local Storage noch Session Storage. Es findet keine Reichweitenmessung, Profilbildung oder personalisierte Werbung statt. Netlify Web Analytics ist nicht aktiviert. Daher wird derzeit kein Einwilligungsbanner eingesetzt.</p>
+      </LegalSection>
+
+      <LegalSection title="9. Speicherdauer">
+        <p>Soweit in dieser Datenschutzerklärung keine besondere Speicherdauer genannt ist, werden personenbezogene Daten nur so lange verarbeitet, wie dies für den jeweiligen Zweck erforderlich ist. Gesetzliche Aufbewahrungsfristen bleiben unberührt.</p>
+      </LegalSection>
+
+      <LegalSection title="10. Deine Rechte">
+        <p>Du hast im Rahmen der gesetzlichen Voraussetzungen das Recht auf Auskunft, Berichtigung, Löschung, Einschränkung der Verarbeitung und Datenübertragbarkeit. Beruht eine Verarbeitung auf Art. 6 Abs. 1 lit. f DSGVO, kannst du aus Gründen, die sich aus deiner besonderen Situation ergeben, Widerspruch gegen die Verarbeitung einlegen.</p>
+        <p>Du hast außerdem das Recht, dich bei einer Datenschutzaufsichtsbehörde zu beschweren. Zuständig ist insbesondere das Bayerische Landesamt für Datenschutzaufsicht, Promenade 18, 91522 Ansbach. Weitere Informationen: <ExternalLegalLink href="https://www.lda.bayern.de/">www.lda.bayern.de</ExternalLegalLink>.</p>
+      </LegalSection>
+
+      <LegalSection title="11. Änderungen dieser Datenschutzerklärung">
+        <p>Ich passe diese Datenschutzerklärung an, wenn sich Funktionen, eingesetzte Dienste oder rechtliche Anforderungen ändern.</p>
+      </LegalSection>
+    </LegalLayout>
+  );
+}
+
+function App() {
+  const [path, setPath] = useState(() => window.location.pathname.replace(/\/+$/, "") || "/");
+  useEffect(() => {
+    const handlePopState = () => setPath(window.location.pathname.replace(/\/+$/, "") || "/");
+    window.addEventListener("popstate", handlePopState);
+    return () => window.removeEventListener("popstate", handlePopState);
+  }, []);
+
+  const page = path === "/impressum" ? <ImpressumPage />
+    : path === "/datenschutz" ? <DatenschutzPage />
+    : <Urlaubsplaner />;
+
+  return (
+    <>
+      {page}
+      <CoffeeFloatingButton />
+    </>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App />);
