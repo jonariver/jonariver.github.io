@@ -2592,7 +2592,7 @@ function KofiFloatingButton({ planReady, path }) {
 
   // Aktuellen Pfad in einem Ref nachführen, damit der verzögerte Timer beim
   // Auslösen den Pfad zu diesem Zeitpunkt prüfen kann (nicht den Pfad, der
-  // beim Start der 3 Minuten galt).
+  // beim Start der 1 Minute galt).
   useEffect(() => { pathRef.current = path; }, [path]);
 
   // Timer beim Unmounten der Seite sauber aufräumen (separat von der
@@ -2605,7 +2605,7 @@ function KofiFloatingButton({ planReady, path }) {
   useEffect(() => {
     if (!planReady || autoShownRef.current) return;
     if (path === "/impressum" || path === "/datenschutz") return;
-    // Einmaliger 3-Minuten-Timer nach dem ersten sichtbaren Planungsergebnis;
+    // Einmaliger 1-Minuten-Timer nach dem ersten sichtbaren Planungsergebnis;
     // sofort gesperrt, damit eine erneute Berechnung keinen zweiten Timer
     // startet.
     autoShownRef.current = true;
@@ -2619,7 +2619,7 @@ function KofiFloatingButton({ planReady, path }) {
       if (typeof window.matchMedia === "function" && !window.matchMedia("(min-width: 640px)").matches) return;
       setAutoExpanded(true);
       hideTimerRef.current = setTimeout(() => setAutoExpanded(false), 5000);
-    }, 3 * 60 * 1000);
+    }, 1 * 60 * 1000);
   }, [planReady, path]);
 
   const expanded = interactiveExpanded || autoExpanded;
