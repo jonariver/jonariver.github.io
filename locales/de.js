@@ -124,6 +124,14 @@
           button: "Profi-Modus öffnen",
         },
       },
+      video: {
+        heading: "FREILOTSE in 30 Sekunden",
+        description: "Sieh dir an, wie FREILOTSE deine Urlaubstage clever mit Feiertagen und Brückentagen kombiniert.",
+        playButtonLabel: "Video abspielen",
+        thumbnailAlt: "Vorschaubild des Erklärvideos",
+        mobileIframeTitle: "FREILOTSE Erklärvideo (Hochformat)",
+        desktopIframeTitle: "FREILOTSE Erklärvideo (Querformat)",
+      },
       features: {
         heading: "Automatisch planen, flexibel anpassen",
         items: [

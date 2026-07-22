@@ -772,6 +772,81 @@ function readShareFragment(hash) {
    Planungslogik, kein eigener State für Eingaben; ein Klick auf einen
    der beiden Einstiegs-Buttons wechselt nur die Ansicht (view) und
    setzt uiMode, ohne bestehende Eingaben zurückzusetzen. */
+// Klick-Vorschau für das Erklärvideo der Landing Page: zeigt zunächst nur ein
+// YouTube-Vorschaubild mit Play-Button; der iframe (youtube-nocookie.com) wird
+// erst nach Klick eingebunden, damit vorher keine YouTube-Ressourcen laden.
+// Smartphone (< 640px, derselbe Mobile-Breakpoint wie in KofiFloatingButton)
+// erhält das Hochkantvideo, Tablet/Desktop das Querformatvideo – reaktiv über
+// matchMedia, damit z. B. eine Fenstergrößenänderung/-drehung korrekt umschaltet.
+function ExplainerVideoSection({ dark, cardCls }) {
+  const MOBILE_QUERY = "(max-width: 639px)";
+  const [isMobile, setIsMobile] = useState(() =>
+    typeof window !== "undefined" && typeof window.matchMedia === "function"
+      ? window.matchMedia(MOBILE_QUERY).matches
+      : false
+  );
+  useEffect(() => {
+    if (typeof window === "undefined" || typeof window.matchMedia !== "function") return;
+    const mql = window.matchMedia(MOBILE_QUERY);
+    const onChange = (e) => setIsMobile(e.matches);
+    if (mql.addEventListener) mql.addEventListener("change", onChange);
+    else mql.addListener(onChange); // Safari < 14
+    return () => {
+      if (mql.removeEventListener) mql.removeEventListener("change", onChange);
+      else mql.removeListener(onChange);
+    };
+  }, []);
+
+  const [played, setPlayed] = useState(false);
+  // Bei Wechsel der Videovariante (z. B. Fenstergrößenänderung) wieder das
+  // Vorschaubild zeigen statt den zuvor gestarteten iframe der anderen Variante.
+  useEffect(() => { setPlayed(false); }, [isMobile]);
+
+  const video = isMobile
+    ? { id: "Rw0EefsI4sk", ratio: "aspect-[9/16]", widthCls: "max-w-[320px] mx-auto", title: t("landing.video.mobileIframeTitle") }
+    : { id: "N1KzGRCX7XA", ratio: "aspect-[16/9]", widthCls: "", title: t("landing.video.desktopIframeTitle") };
+  const thumbnailUrl = `https://i.ytimg.com/vi/${video.id}/hqdefault.jpg`;
+  const embedUrl = `https://www.youtube-nocookie.com/embed/${video.id}?autoplay=1&playsinline=1`;
+
+  return (
+    <section className="space-y-4">
+      <div className="text-center max-w-2xl mx-auto space-y-2">
+        <h2 className="text-xl font-bold">{t("landing.video.heading")}</h2>
+        <p className={`text-sm leading-relaxed ${dark ? "text-slate-300" : "text-slate-600"}`}>
+          {t("landing.video.description")}
+        </p>
+      </div>
+      <div className={video.widthCls}>
+        <div className={`${cardCls} relative w-full ${video.ratio} overflow-hidden`}>
+          {played ? (
+            <iframe
+              src={embedUrl}
+              title={video.title}
+              className="absolute inset-0 h-full w-full border-0"
+              allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+              allowFullScreen
+            />
+          ) : (
+            <button type="button" onClick={() => setPlayed(true)}
+              aria-label={t("landing.video.playButtonLabel")}
+              className="group absolute inset-0 h-full w-full cursor-pointer focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-inset">
+              <img src={thumbnailUrl} alt={t("landing.video.thumbnailAlt")}
+                className="h-full w-full object-cover" loading="lazy" />
+              <span className="absolute inset-0 flex items-center justify-center bg-black/20 transition-colors group-hover:bg-black/30">
+                <span className="flex h-14 w-14 sm:h-16 sm:w-16 items-center justify-center rounded-full bg-white/90 shadow-lg transition-transform group-hover:scale-105">
+                  <svg viewBox="0 0 24 24" aria-hidden="true" className="h-6 w-6 sm:h-7 sm:w-7 translate-x-0.5 fill-emerald-600">
+                    <path d="M8 5v14l11-7z" />
+                  </svg>
+                </span>
+              </span>
+            </button>
+          )}
+        </div>
+      </div>
+    </section>
+  );
+}
+
 function LandingPage({ dark, setDark, cardCls, onStartSimple, onStartPro }) {
   const softTextCls = dark ? "text-slate-300" : "text-slate-600";
   const mutedTextCls = dark ? "text-slate-400" : "text-slate-500";
@@ -851,6 +926,13 @@ function LandingPage({ dark, setDark, cardCls, onStartSimple, onStartPro }) {
             </div>
           </div>
         </section>
+
+        {/* Erklärvideo: Smartphone erhält ein Hochkantvideo (9:16), Tablet/Desktop
+            ein Querformatvideo (16:9) – Auswahl rein per matchMedia anhand des
+            im Projekt bereits verwendeten Mobile-Breakpoints (< 640px, siehe
+            KofiFloatingButton). Es wird nie mehr als ein iframe gleichzeitig
+            eingebunden; vor dem Klick nur ein statisches Vorschaubild. */}
+        <ExplainerVideoSection dark={dark} cardCls={cardCls} />
 
         {/* Funktionsbereich */}
         <section className="space-y-4">
@@ -2618,7 +2700,7 @@ function KofiFloatingButton({ planReady, path }) {
       // Verhalten).
       if (typeof window.matchMedia === "function" && !window.matchMedia("(min-width: 640px)").matches) return;
       setAutoExpanded(true);
-      hideTimerRef.current = setTimeout(() => setAutoExpanded(false), 5000);
+      hideTimerRef.current = setTimeout(() => setAutoExpanded(false), 7000);
     }, 1 * 60 * 1000);
   }, [planReady, path]);
 
