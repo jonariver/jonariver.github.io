@@ -917,7 +917,7 @@ function LandingPage({ dark, setDark, cardCls, onStartSimple, onStartPro }) {
 /* App                                                                 */
 /* ------------------------------------------------------------------ */
 
-function Urlaubsplaner() {
+function Urlaubsplaner({ onPlanReady }) {
   const currentYear = new Date().getFullYear();
   // Geteilte Planung EINMAL aus dem URL-Fragment lesen, bevor die States
   // initialisiert werden. Das alte #plan=-Format wird synchron dekodiert und
@@ -1164,6 +1164,21 @@ function Urlaubsplaner() {
     };
     return plan(days, cfg);
   }, [days, vac, ot, blocks, effAutoVac, effAutoOt, spendFirst, autoFrom, yearOverrides, effectiveSchoolHolidayPreference, hasVacationData, vacationDays]);
+
+  // Ko-fi-Hinweis: einmalig pro Seitenaufruf, sobald erstmals ein echtes
+  // Planungsergebnis mit mindestens einem Urlaubsblock sichtbar ist (Einfach-
+  // Modus: nach Klick auf "Beste Planung berechnen"; Profi-Modus: sobald das
+  // Ergebnis, das dort ohnehin live berechnet wird, Blöcke enthält). Löst
+  // weder auf der Landing Page noch bei leerem Ergebnis aus.
+  const firstPlanShownRef = useRef(false);
+  useEffect(() => {
+    if (firstPlanShownRef.current || view !== "planner") return;
+    const hasBlocks = result.periods.length > 0;
+    const ready = (uiMode === "einfach" && simpleStarted && hasBlocks) || (uiMode === "profi" && hasBlocks);
+    if (!ready) return;
+    firstPlanShownRef.current = true;
+    if (onPlanReady) onPlanReady();
+  }, [view, uiMode, simpleStarted, result.periods.length, onPlanReady]);
 
   // Single Source of Truth: Beide Modi nutzen dieselben States und dasselbe
   // Ergebnis. Der Einfachmodus übersetzt das gewählte Ziel direkt in die
@@ -2531,8 +2546,10 @@ function SiteLink({ to, children, className = "" }) {
   return <a href={to} onClick={(event) => internalNavigate(event, to)} className={className}>{children}</a>;
 }
 
-const COFFEE_URL = "https://buymeacoffee.com/freilotse";
-const COFFEE_ARIA_LABEL = "FREILOTSE mit einem Kaffee unterstützen";
+const KOFI_URL = "https://ko-fi.com/freilotse";
+const KOFI_ARIA_LABEL = "FREILOTSE über Ko-fi mit einem Kaffee unterstützen";
+const KOFI_LABEL_TEXT = "Supporte FREILOTSE mit einem Kaffee";
+const KOFI_HINT_TEXT = "Hat dir FREILOTSE geholfen? Unterstütze das Projekt ☕";
 
 function CoffeeIcon({ className = "" }) {
   return (
@@ -2547,9 +2564,9 @@ function CoffeeIcon({ className = "" }) {
   );
 }
 
-function CoffeeFooterLink({ dark }) {
+function KofiFooterLink({ dark }) {
   return (
-    <a href={COFFEE_URL} target="_blank" rel="noopener noreferrer"
+    <a href={KOFI_URL} target="_blank" rel="noopener noreferrer"
       className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 font-semibold transition-colors focus:outline-none focus:ring-2 focus:ring-emerald-500 ${
         dark ? "bg-emerald-900/40 text-emerald-300 hover:bg-emerald-900/60" : "bg-emerald-50 text-emerald-700 hover:bg-emerald-100"
       }`}>
@@ -2559,38 +2576,61 @@ function CoffeeFooterLink({ dark }) {
   );
 }
 
-function CoffeeFloatingButton() {
-  const [expanded, setExpanded] = useState(false);
+function KofiFloatingButton({ planReady, path }) {
+  const [interactiveExpanded, setInteractiveExpanded] = useState(false);
+  const [autoExpanded, setAutoExpanded] = useState(false);
   const canHoverRef = useRef(false);
+  const autoShownRef = useRef(false);
+  const hideTimerRef = useRef(null);
+
   useEffect(() => {
     canHoverRef.current = typeof window.matchMedia === "function"
       && window.matchMedia("(hover: hover) and (pointer: fine)").matches;
   }, []);
+
+  // Timer beim Unmounten der Seite sauber aufräumen (separat von der
+  // Auslöse-Logik, damit ein Cleanup nicht bei jeder Prop-Änderung feuert).
+  useEffect(() => () => { if (hideTimerRef.current) clearTimeout(hideTimerRef.current); }, []);
+
+  useEffect(() => {
+    if (!planReady || autoShownRef.current) return;
+    if (path === "/impressum" || path === "/datenschutz") return;
+    // Auf schmalen Smartphone-Displays wird der automatische Hinweis
+    // unterdrückt, da der längere Hinweistext dort Inhalte verdecken könnte;
+    // Tippen öffnet Ko-fi weiterhin direkt (unverändertes Verhalten).
+    if (typeof window.matchMedia === "function" && !window.matchMedia("(min-width: 640px)").matches) return;
+    autoShownRef.current = true;
+    setAutoExpanded(true);
+    hideTimerRef.current = setTimeout(() => setAutoExpanded(false), 5000);
+  }, [planReady, path]);
+
+  const expanded = interactiveExpanded || autoExpanded;
+
   return (
     <>
       <style>{`
-        .coffee-fab { position: fixed; right: 0; top: 50%; transform: translateY(-50%); }
+        .kofi-fab { position: fixed; right: 0; top: 50%; transform: translateY(-50%); }
         @media (max-width: 639px) {
-          .coffee-fab { top: auto; transform: none; bottom: max(1.25rem, env(safe-area-inset-bottom)); }
+          .kofi-fab { top: auto; transform: none; bottom: max(1.25rem, env(safe-area-inset-bottom)); }
         }
-        .coffee-fab-label {
+        .kofi-fab-label {
           display: inline-block; max-width: 0; margin-left: 0; opacity: 0; overflow: hidden; white-space: nowrap;
           transition: max-width .3s ease, opacity .25s ease, margin-left .3s ease;
         }
-        .coffee-fab-label.is-expanded { max-width: 220px; opacity: 1; margin-left: .5rem; }
+        .kofi-fab-label.is-expanded { max-width: 440px; opacity: 1; margin-left: .5rem; }
         @media (prefers-reduced-motion: reduce) {
-          .coffee-fab-label { transition: none; }
+          .kofi-fab-label { transition: none; }
         }
       `}</style>
-      <a href={COFFEE_URL} target="_blank" rel="noopener noreferrer" aria-label={COFFEE_ARIA_LABEL}
-        onMouseEnter={() => { if (canHoverRef.current) setExpanded(true); }}
-        onMouseLeave={() => { if (canHoverRef.current) setExpanded(false); }}
-        onFocus={() => setExpanded(true)}
-        onBlur={() => setExpanded(false)}
-        className="coffee-fab z-30 flex items-center overflow-hidden rounded-l-full border border-r-0 border-emerald-400/30 bg-slate-900 py-3 pl-3 pr-3 text-white shadow-lg hover:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-emerald-500">
+      <a href={KOFI_URL} target="_blank" rel="noopener noreferrer" aria-label={KOFI_ARIA_LABEL}
+        onMouseEnter={() => { if (canHoverRef.current) setInteractiveExpanded(true); }}
+        onMouseLeave={() => { if (canHoverRef.current) setInteractiveExpanded(false); }}
+        onFocus={() => setInteractiveExpanded(true)}
+        onBlur={() => setInteractiveExpanded(false)}
+        className="kofi-fab z-30 flex items-center overflow-hidden rounded-l-full border border-r-0 border-emerald-400/30 bg-slate-900 py-3 pl-3 pr-3 text-white shadow-lg hover:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-emerald-500">
         <CoffeeIcon className="shrink-0 text-emerald-400" />
-        <span className={`coffee-fab-label text-sm font-semibold${expanded ? " is-expanded" : ""}`}>
-          Supporte mich mit einem Kaffee
+        <span className={`kofi-fab-label text-sm font-semibold${expanded ? " is-expanded" : ""}`}>
+          {autoExpanded ? KOFI_HINT_TEXT : KOFI_LABEL_TEXT}
         </span>
       </a>
     </>
@@ -2607,7 +2647,7 @@ function SiteFooter({ dark = true }) {
         <nav aria-label="Rechtliches und Unterstützung" className="flex flex-wrap items-center gap-x-4 gap-y-2">
           <SiteLink to="/impressum" className={hover}>Impressum</SiteLink>
           <SiteLink to="/datenschutz" className={hover}>Datenschutz</SiteLink>
-          <CoffeeFooterLink dark={dark} />
+          <KofiFooterLink dark={dark} />
         </nav>
       </div>
     </footer>
@@ -2736,8 +2776,8 @@ function DatenschutzPage() {
         <p>Die Daten werden gelöscht, sobald sie für die Bearbeitung nicht mehr erforderlich sind und keine gesetzlichen Aufbewahrungspflichten entgegenstehen.</p>
       </LegalSection>
 
-      <LegalSection title="7. Externer Link zu Buy Me a Coffee">
-        <p>Auf der Website befindet sich ein normaler externer Link zu meinem Profil bei Buy Me a Coffee. Beim bloßen Besuch von FREILOTSE werden dadurch keine Daten an Buy Me a Coffee übertragen. Erst wenn du den Link anklickst, verlässt du diese Website und dein Browser stellt eine Verbindung zu Buy Me a Coffee her. Für die dortige Verarbeitung ist der Betreiber von Buy Me a Coffee verantwortlich. Weitere Informationen findest du in der <ExternalLegalLink href="https://www.buymeacoffee.com/privacy-policy">Datenschutzerklärung von Buy Me a Coffee</ExternalLegalLink>.</p>
+      <LegalSection title="7. Externer Link zu Ko-fi">
+        <p>Auf dieser Website befindet sich ein normaler externer Link zu meinem Profil bei Ko-fi. Beim bloßen Besuch von FREILOTSE werden dadurch keine Daten an Ko-fi übertragen. Erst wenn du den Link anklickst, verlässt du diese Website und dein Browser stellt eine Verbindung zu Ko-fi her. Dabei können personenbezogene Daten, insbesondere deine IP-Adresse und technische Verbindungsdaten, durch Ko-fi verarbeitet werden. Für die weitere Datenverarbeitung auf der Ko-fi-Website ist Ko-fi verantwortlich. Weitere Informationen findest du in der <ExternalLegalLink href="https://ko-fi.com/home/privacy">Datenschutzerklärung von Ko-fi</ExternalLegalLink>.</p>
       </LegalSection>
 
       <LegalSection title="8. Cookies, lokale Speicherung und Reichweitenmessung">
@@ -2762,6 +2802,7 @@ function DatenschutzPage() {
 
 function App() {
   const [path, setPath] = useState(() => window.location.pathname.replace(/\/+$/, "") || "/");
+  const [planReady, setPlanReady] = useState(false);
   useEffect(() => {
     const handlePopState = () => setPath(window.location.pathname.replace(/\/+$/, "") || "/");
     window.addEventListener("popstate", handlePopState);
@@ -2770,12 +2811,12 @@ function App() {
 
   const page = path === "/impressum" ? <ImpressumPage />
     : path === "/datenschutz" ? <DatenschutzPage />
-    : <Urlaubsplaner />;
+    : <Urlaubsplaner onPlanReady={() => setPlanReady(true)} />;
 
   return (
     <>
       {page}
-      <CoffeeFloatingButton />
+      <KofiFloatingButton planReady={planReady} path={path} />
     </>
   );
 }
