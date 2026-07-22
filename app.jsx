@@ -781,7 +781,8 @@ function LandingPage({ dark, setDark, cardCls, onStartSimple, onStartPro }) {
     <>
       <header className="bg-slate-900 text-white">
         <div className="max-w-6xl mx-auto px-4 py-6 flex items-center justify-between gap-4">
-          <h1 className="text-2xl font-bold tracking-tight">{t("common.documentTitle")}</h1>
+          <img src="./assets/logo/freilotse-logo-horizontal-dark-bg.svg" alt="FREILOTSE Urlaubsplaner"
+            className="w-[165px] md:w-[200px] h-auto" />
           <button onClick={() => setDark(!dark)}
             className="rounded-md border border-slate-600 px-2.5 py-1 text-xs font-semibold text-slate-300 hover:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-emerald-500"
             title={t("theme.toggleTitle")}>
@@ -1848,9 +1849,9 @@ function Urlaubsplaner() {
         <div className="max-w-6xl mx-auto px-4 py-6 flex flex-wrap items-end justify-between gap-4">
           <div>
             <button onClick={() => setView("landing")}
-              className="mb-1 text-xs font-semibold text-slate-400 hover:text-slate-200 focus:outline-none focus:ring-2 focus:ring-emerald-500 rounded"
+              className="mb-1 inline-flex focus:outline-none focus:ring-2 focus:ring-emerald-500 rounded opacity-90 hover:opacity-100 transition-opacity"
               aria-label={t("nav.backToStartAriaLabel")}>
-              {t("nav.backToStart")}
+              <img src="./assets/logo/freilotse-nav-dark-bg.svg" alt="" className="w-28 sm:w-32 h-auto" />
             </button>
             <p className="text-xs font-semibold uppercase tracking-widest text-emerald-400 mb-1">
               {t("header.tagline", { state: STATES[st] })}

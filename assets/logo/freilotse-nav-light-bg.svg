@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 273.390625 72" width="273.390625" height="72">
+<rect x="8" y="8" width="56" height="56" rx="12.32" fill="#0B1E36"></rect>
+<path d="M36 20.32 L42.79 36 L29.21 36 Z" fill="#FFFFFF"></path>
+<path d="M36 51.68 L42.79 36 L29.21 36 Z" fill="#12B886"></path>
+<circle cx="36" cy="36" r="7.5824" fill="#0B1E36"></circle>
+<circle cx="36" cy="36" r="5.4835199999999995" fill="#0E9A70"></circle>
+<text x="76" y="28" font-family="Manrope, Arial, sans-serif" font-weight="800" font-size="30" fill="#0B1E36" dominant-baseline="central">FREILOTSE</text>
+<text x="76" y="50" font-family="Manrope, Arial, sans-serif" font-weight="600" font-size="13" letter-spacing="1" fill="#6B7785" dominant-baseline="central">URLAUBSPLANER</text>
+</svg>

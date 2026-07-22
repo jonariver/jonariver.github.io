@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 575.5 152" width="575.5" height="152">
+<rect x="16" y="16" width="120" height="120" rx="26.4" fill="#0B1E36"></rect>
+<path d="M76 42.4 L90.55 76 L61.45 76 Z" fill="#FFFFFF"></path>
+<path d="M76 109.6 L90.55 76 L61.45 76 Z" fill="#12B886"></path>
+<circle cx="76" cy="76" r="16.247999999999998" fill="#0B1E36"></circle>
+<circle cx="76" cy="76" r="11.750399999999999" fill="#0E9A70"></circle>
+<text x="160" y="76" font-family="Manrope, Arial, sans-serif" font-weight="800" font-size="64" fill="#0B1E36" dominant-baseline="central">FREILOTSE</text>
+</svg>
