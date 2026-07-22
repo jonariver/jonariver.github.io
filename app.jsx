@@ -101,7 +101,7 @@ const isBavarianPartialAssumptionDay = (day, st) => st === "BY" && day.m === 7 &
 const withAssumptionDayCaveat = (name, day, st) =>
   isBavarianPartialAssumptionDay(day, st) ? `${name} ${t("holidayCaveats.assumptionDayInline")}` : name;
 
-function dayTitle(day, selType, st) {
+function dayTitle(day, selType, st, inPeriod) {
   const parts = [fmtDate(day)];
   if (day.holiday) parts.push(withAssumptionDayCaveat(day.holiday, day, st));
   if (day.special) parts.push(day.special);
@@ -113,7 +113,14 @@ function dayTitle(day, selType, st) {
   if (day.weekend && day.isWorkingDay) parts.push(t("calendar.personalWorkday"));
   else if (!day.weekend && !day.isWorkingDay) parts.push(t("legend.regularlyOff"));
   if (selType === "vac") parts.push(t("dayType.vacation"));
-  if (selType === "ot") parts.push(t("dayType.overtime"));
+  else if (selType === "ot") parts.push(t("dayType.overtime"));
+  // "Freier Zeitraum" nur ergänzen, wenn dadurch keine unnötige Wiederholung
+  // entsteht: ein eingesetzter Urlaubs-/Überstundentag sagt über selType
+  // bereits eindeutig, dass er Teil der Planung ist; für die "verbindenden"
+  // Tage eines Zeitraums (Wochenende, Feiertag, regelmäßig frei) ohne selType
+  // liefert der Hinweis dagegen echten Mehrwert (dieser Tag gehört zu einem
+  // größeren, geplanten freien Block statt isoliert zu stehen).
+  if (inPeriod && !selType) parts.push(t("legend.freePeriod"));
   return parts.join(" · ");
 }
 
@@ -200,9 +207,17 @@ function Urlaubsplaner({ onPlanReady }) {
   // hervorgehoben wird, und ein wartender Zielmonat, falls der Kalender im
   // Einfachmodus erst noch eingeblendet werden muss. Gemeinsam für beide Modi.
   const [highlightedMonth, setHighlightedMonth] = useState(null);
-  const [scrollTarget, setScrollTarget] = useState(null);
+  const [scrollTarget, setScrollTarget] = useState(null); // { month, period } | null
   const monthRefs = useRef([]); // DOM-Referenzen der 12 Monats-Container (Index = Monat 0-basiert)
   const highlightTimerRef = useRef(null);
+  // Temporäre, deutlich stärkere Hervorhebung des konkret angeklickten
+  // Zeitraums (zusätzlich zur Monatskarten-Hervorhebung oben). Speichert nur
+  // { s, e } – die Gültigkeit wird bei jedem Render gegen das aktuelle
+  // result.periods geprüft (siehe highlightedPeriodRange weiter unten), damit
+  // nach einer Neuberechnung (z. B. manuelles Entfernen) nie eine veraltete
+  // Markierung stehen bleibt.
+  const [highlightedPeriod, setHighlightedPeriod] = useState(null);
+  const periodHighlightTimerRef = useRef(null);
   // Eingeklappte Bereiche gelten nur für die aktuelle Sitzung im React-State;
   // Standard: mobil nur "Allgemein" offen. Keine Browser-Persistenz.
   const [panels, setPanels] = useState(() => {
@@ -361,6 +376,19 @@ function Urlaubsplaner({ onPlanReady }) {
     };
     return plan(days, cfg);
   }, [days, vac, ot, blocks, effAutoVac, effAutoOt, spendFirst, autoFrom, yearOverrides, effectiveSchoolHolidayPreference, hasVacationData, vacationDays]);
+
+  // Zuordnung Tag-Index -> Zeitraum, EINMAL aus result.periods abgeleitet
+  // (Single Source of Truth, keine doppelte Berechnung, kein eigener
+  // persistenter State) – aktualisiert sich automatisch bei jeder
+  // Neuberechnung von result (z. B. nach manuellem Entfernen eines Tages).
+  // isStart/isEnd steuern die abgerundeten Ecken des Freizeitbands im Kalender.
+  const periodDayInfo = useMemo(() => {
+    const map = new Map();
+    for (const p of result.periods) {
+      for (let k = p.s; k <= p.e; k++) map.set(k, { isStart: k === p.s, isEnd: k === p.e });
+    }
+    return map;
+  }, [result.periods]);
 
   // Ko-fi-Hinweis: einmalig pro Seitenaufruf, sobald erstmals ein echtes
   // Planungsergebnis mit mindestens einem Urlaubsblock sichtbar ist (Einfach-
@@ -808,14 +836,20 @@ function Urlaubsplaner({ onPlanReady }) {
   // Mobilfreundliche Navigation: von einem empfohlenen Zeitraum weich zum
   // passenden Monat im Kalender springen. EINE Quelle für Einfach- UND
   // Profi-Modus; greift NICHT in plan()/die Kernberechnung, den Share-Link
-  // oder gespeicherte Daten ein – reines Rendering/Scrolling.
-  const performScroll = (m) => {
+  // oder gespeicherte Daten ein – reines Rendering/Scrolling. Hebt zusätzlich
+  // zur Monatskarte auch den konkret angeklickten Zeitraum kurz stärker hervor.
+  const performScroll = (m, period) => {
     const el = monthRefs.current[m];
     if (!el) return;
     el.scrollIntoView({ behavior: "smooth", block: "start" });
     setHighlightedMonth(m);
     if (highlightTimerRef.current) clearTimeout(highlightTimerRef.current);
     highlightTimerRef.current = setTimeout(() => setHighlightedMonth(null), 1800);
+    if (period) {
+      setHighlightedPeriod({ s: period.s, e: period.e });
+      if (periodHighlightTimerRef.current) clearTimeout(periodHighlightTimerRef.current);
+      periodHighlightTimerRef.current = setTimeout(() => setHighlightedPeriod(null), 2000);
+    }
   };
   // Wartet im Einfachmodus, bis der Kalender nach setShowSimpleCal(true)
   // tatsächlich gerendert ist (monthRefs gefüllt), bevor gescrollt wird.
@@ -823,19 +857,28 @@ function Urlaubsplaner({ onPlanReady }) {
     if (scrollTarget === null) return;
     if (uiMode === "einfach" && !showSimpleCal) return; // erst wenn der Kalender sichtbar ist
     const id = requestAnimationFrame(() => {
-      performScroll(scrollTarget);
+      performScroll(scrollTarget.month, scrollTarget.period);
       setScrollTarget(null);
     });
     return () => cancelAnimationFrame(id);
   }, [scrollTarget, showSimpleCal, uiMode]);
-  useEffect(() => () => { if (highlightTimerRef.current) clearTimeout(highlightTimerRef.current); }, []);
+  useEffect(() => () => {
+    if (highlightTimerRef.current) clearTimeout(highlightTimerRef.current);
+    if (periodHighlightTimerRef.current) clearTimeout(periodHighlightTimerRef.current);
+  }, []);
+  // Gültigkeit erst beim Rendern gegen das AKTUELLE result.periods prüfen
+  // (nicht nur beim Auslösen): ändert sich die Planung während der ~2s
+  // Anzeige (z. B. manuelles Entfernen), verschwindet eine dadurch veraltete
+  // Hervorhebung automatisch, statt falsche Tage weiter zu markieren.
+  const highlightedPeriodValid = highlightedPeriod
+    && result.periods.some((p) => p.s === highlightedPeriod.s && p.e === highlightedPeriod.e);
   const scrollToPeriod = (p) => {
     const targetMonth = days[p.s].m; // Zeiträume über mehrere Monate: Startmonat
     if (uiMode === "einfach" && !showSimpleCal) {
       setShowSimpleCal(true);
-      setScrollTarget(targetMonth);
+      setScrollTarget({ month: targetMonth, period: p });
     } else {
-      performScroll(targetMonth);
+      performScroll(targetMonth, p);
     }
   };
   // Tastaturbedienung: nur reagieren, wenn der Fokus auf der Zeile selbst liegt
@@ -942,6 +985,12 @@ function Urlaubsplaner({ onPlanReady }) {
                         ? clickMode === "vac" ? "ring-2 ring-emerald-500" : "ring-2 ring-sky-500"
                         : manual && manual !== "none" ? (dark ? "ring-2 ring-slate-300" : "ring-2 ring-slate-500")
                         : clickable ? "hover:ring-2 hover:ring-emerald-400" : "";
+                      // Freizeitband: Tag-Index -> Zeitraum ausschließlich über die
+                      // oben aus result.periods abgeleitete periodDayInfo-Map (Single
+                      // Source of Truth, keine doppelte Berechnung).
+                      const periodInfo = periodDayInfo.get(day.i);
+                      const inHighlightedPeriod = periodInfo && highlightedPeriodValid
+                        && day.i >= highlightedPeriod.s && day.i <= highlightedPeriod.e;
                       // Tooltip-Text für Ferien, z. B. "Sommerferien in Bayern · 2.8.2027 bis 14.9.2027"
                       const vacTipText = vac
                         ? t("calendar.vacationTooltip", {
@@ -949,9 +998,10 @@ function Urlaubsplaner({ onPlanReady }) {
                             start: vac.start.toLocaleDateString("de-DE"), end: vac.end.toLocaleDateString("de-DE"),
                           })
                         : null;
+                      const titleText = dayTitle(day, selType, st, !!periodInfo);
                       return (
                         <button key={day.i} type="button"
-                          title={vacTipText ? `${dayTitle(day, selType, st)} · ${vacTipText}` : dayTitle(day, selType, st)}
+                          title={vacTipText ? `${titleText} · ${vacTipText}` : titleText}
                           data-dayindex={day.i}
                           onClick={() => {
                             if (dragAppliedRef.current) { dragAppliedRef.current = false; return; }
@@ -973,6 +1023,23 @@ function Urlaubsplaner({ onPlanReady }) {
                             clickable ? "cursor-pointer" : "cursor-default"
                           } ${ring} ${dayClass(day, selType, showWeekendHolidays, dark)}`}>
                           {day.d}
+                          {periodInfo && (
+                            /* Freier Zeitraum (result.periods): dünner mintgrüner Innenrahmen als
+                               reines Overlay – überschreibt die Grundfarbe/den Ring der Zelle nicht.
+                               Abgerundete Ecken nur am tatsächlichen Anfang/Ende des Zeitraums (p.s/p.e);
+                               dazwischen (auch über Zeilen-/Monatsgrenzen hinweg) bewusst ohne Rundung
+                               und ohne seitlichen Rand auf der "offenen" Seite, damit die Fortsetzung
+                               als durchgehendes Band erkennbar bleibt. Bei aktiver, gültiger
+                               Kurz-Hervorhebung (highlightedPeriodValid) kräftiger/deckend statt dezent. */
+                            <span aria-hidden="true"
+                              className={`pointer-events-none absolute inset-0.5 border-t-2 border-b-2 transition-colors duration-300 ${
+                                periodInfo.isStart ? "rounded-l-md border-l-2" : "border-l-0"
+                              } ${periodInfo.isEnd ? "rounded-r-md border-r-2" : "border-r-0"} ${
+                                inHighlightedPeriod
+                                  ? (dark ? "border-emerald-300" : "border-emerald-600")
+                                  : (dark ? "border-emerald-300/50" : "border-emerald-600/40")
+                              }`} />
+                          )}
                           {vac && (
                             /* Schulferien: dezente Ebene – Streifen am unteren Rand in eigener Farbe (Orange),
                                deutlich verschieden von Urlaub (grün), Feiertag (rot), Überstunden (blau),
@@ -1770,6 +1837,9 @@ function Urlaubsplaner({ onPlanReady }) {
                 ]]),
                 [dark ? "bg-slate-800 ring-2 ring-slate-400" : "bg-white ring-2 ring-slate-500", t("legend.manualSet")],
                 ["bg-orange-400", t("legend.schoolHolidays")],
+                // Swatch als Rahmen statt Füllung, passend zur tatsächlichen
+                // Darstellung im Kalender (dünner Innenrahmen, kein Flächenfüllen).
+                [`bg-transparent border-2 rounded ${dark ? "border-emerald-300" : "border-emerald-600"}`, t("legend.freePeriod")],
               ].map(([c, l]) => (
                 <span key={l} className="inline-flex items-center gap-1.5">
                   <span className={`inline-block w-3 h-3 rounded-sm ${c}`} /> {l}

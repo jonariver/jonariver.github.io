@@ -23,6 +23,17 @@
   // locales/de.js passen (gleiche Schlüssel, gleiche Funktionssignaturen).
   const EN_TEMPLATE_NOT_ACTIVE = null;
 
+  // Einzelner, gezielt nachgetragener Schlüssel (ausdrücklich beauftragt) für
+  // die neue Kalenderlegende "Freier Zeitraum" (siehe locales/de.js,
+  // legend.freePeriod) – bewusst NUR dieser eine Schlüssel, keine vollständige
+  // Übersetzung der übrigen Datei. Rein vorbereitend: bleibt unregistriert und
+  // ohne jede Wirkung auf die Anwendung (siehe Hinweis oben), aktiviert kein
+  // Englisch und fügt keinen Sprachumschalter hinzu.
+  const EN_PARTIAL_NOT_REGISTERED = {
+    legend: { freePeriod: "Free period" },
+  };
+  void EN_PARTIAL_NOT_REGISTERED;
+
   // Bewusst: keine window.I18N.registerLocale(...)-Registrierung hier.
   // Diese Datei hat aktuell keinerlei Effekt auf die Anwendung.
   void EN_TEMPLATE_NOT_ACTIVE;

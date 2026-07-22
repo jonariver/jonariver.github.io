@@ -443,6 +443,7 @@
       manualSet: "manuell gesetzt",
       schoolHolidays: "Schulferien",
       regularlyOff: "Regelmäßig frei",
+      freePeriod: "Freier Zeitraum",
     },
 
     footerHint: {
