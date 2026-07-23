@@ -21,7 +21,7 @@
 <body class="bg-slate-950">
   <div id="root"></div>
   <noscript>Bitte JavaScript aktivieren, um den Urlaubsplaner zu nutzen.</noscript>
-  <script src="locales/de.js?v=1"></script>
+  <script src="locales/de.js?v=2"></script>
   <!-- Reine Planungs-/Kalender-/Datenmodule (kein Modulsystem -> window.FREILOTSE.*,
        siehe CLAUDE.md, Abschnitt „Architektur/Module"). Reihenfolge untereinander
        ist unkritisch (keine Abhängigkeiten untereinander), muss aber vor den
@@ -32,12 +32,14 @@
   <script src="js/share-link.js?v=1"></script>
   <!-- Ausgelagerte JSX-Komponenten (über Babel-Standalone verarbeitet). Reihenfolge:
        common-components zuerst (keine Abhängigkeiten), dann kofi-components
-       (SiteFooter/SiteLink), danach landing-page und legal-pages (beide nutzen
-       Komponenten aus kofi-components). app.jsx lädt zuletzt und mountet die App. -->
+       (SiteFooter/SiteLink), danach landing-page, legal-pages und about-page
+       (alle drei nutzen Komponenten aus kofi-components). app.jsx lädt zuletzt
+       und mountet die App. -->
   <script type="text/babel" data-presets="react" src="jsx/common-components.jsx?v=1"></script>
-  <script type="text/babel" data-presets="react" src="jsx/kofi-components.jsx?v=1"></script>
-  <script type="text/babel" data-presets="react" src="jsx/landing-page.jsx?v=1"></script>
+  <script type="text/babel" data-presets="react" src="jsx/kofi-components.jsx?v=2"></script>
+  <script type="text/babel" data-presets="react" src="jsx/landing-page.jsx?v=2"></script>
   <script type="text/babel" data-presets="react" src="jsx/legal-pages.jsx?v=1"></script>
-  <script type="text/babel" data-presets="react" src="app.jsx?v=5"></script>
+  <script type="text/babel" data-presets="react" src="jsx/about-page.jsx?v=1"></script>
+  <script type="text/babel" data-presets="react" src="app.jsx?v=6"></script>
 </body>
 </html>

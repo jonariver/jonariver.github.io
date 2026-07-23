@@ -37,6 +37,7 @@ const {
   SiteFooter, KofiFloatingButton,
   LandingPage,
   ImpressumPage, DatenschutzPage,
+  AboutPage,
 } = window.FREILOTSE.ui;
 
 /* ------------------------------------------------------------------ */
@@ -60,15 +61,18 @@ const fmtDDMM = (ts) => {
   return `${String(dt.getUTCDate()).padStart(2, "0")}.${String(dt.getUTCMonth() + 1).padStart(2, "0")}.`;
 };
 
-function dayClass(day, selType, showWeekendHolidays, dark) {
+function dayClass(day, selType, dark) {
   if (selType === "vac") return "bg-emerald-600 text-white";
   if (selType === "ot") return "bg-sky-600 text-white";
+  // Feiertag: ausschließlich der persönliche Arbeitsstatus entscheidet, NICHT
+  // der kalendarische Wochentag. Ein Feiertag an einem persönlichen
+  // Arbeitstag (auch Sa/So bei individueller Arbeitswoche) wäre regulär ein
+  // Arbeitstag gewesen und wird daher kräftig dargestellt; ein Feiertag an
+  // einem ohnehin regelmäßig freien Tag (auch Mo-Fr bei individueller
+  // Arbeitswoche) bringt keinen zusätzlichen Vorteil und bleibt dezent.
   if (day.holiday) {
-    if (day.weekend) {
-      if (!showWeekendHolidays) return dark ? "bg-slate-800 text-slate-600" : "bg-slate-200 text-slate-400";
-      return dark ? "bg-rose-900/70 text-rose-300" : "bg-rose-200 text-rose-800";
-    }
-    return "bg-rose-600 text-white";
+    if (day.isWorkingDay) return "bg-rose-600 text-white";
+    return dark ? "bg-rose-900/70 text-rose-300" : "bg-rose-200 text-rose-800";
   }
   if (day.special && day.cost === 0 && !day.weekend) return dark ? "bg-amber-400 text-amber-950" : "bg-amber-300 text-amber-900";
   if (day.special && day.cost === 0.5) return dark ? "bg-amber-900/70 text-amber-300" : "bg-amber-100 text-amber-800";
@@ -149,7 +153,6 @@ function Urlaubsplaner({ onPlanReady }) {
   const [vac, setVac] = useState(shared ? shared.vac : 30);
   const [ot, setOt] = useState(shared ? shared.ot : 0);
   const [xmasRule, setXmasRule] = useState(shared ? shared.xmasRule : "50"); // Standard: halber Urlaubstag am 24./31.12.
-  const [showWeekendHolidays, setShowWeekendHolidays] = useState(shared ? shared.showWeekendHolidays : true);
   // Regelmäßige Arbeitstage – gemeinsamer Zustand für Einfach- UND Profi-Modus
   // (siehe CLAUDE.md, Abschnitt „Regelmäßige Arbeitstage"). Format: Array von
   // Date.getUTCDay()-Indizes (0=So…6=Sa), Standard Montag–Freitag. NUR für
@@ -510,7 +513,7 @@ function Urlaubsplaner({ onPlanReady }) {
     buildSharePayload({
       year, st, vac: num(vac), ot: num(ot), xmasRule,
       uiMode, simpleGoal, simpleStarted, schoolHolidayPreference,
-      autoVac, autoOt, spendFirst, autoFrom, showWeekendHolidays,
+      autoVac, autoOt, spendFirst, autoFrom,
       blocks, overridesMd: yearOverrides, workingWeekdays,
     });
   const shareBaseUrl = () => `${window.location.origin}${window.location.pathname}`;
@@ -536,7 +539,7 @@ function Urlaubsplaner({ onPlanReady }) {
     setUiMode(s.uiMode); setSimpleGoal(s.simpleGoal); setSimpleStarted(s.simpleStarted);
     setSchoolHolidayPreference(s.schoolHolidayPreference);
     setAutoVac(s.autoVac); setAutoOt(s.autoOt); setSpendFirst(s.spendFirst);
-    setAutoFrom(s.autoFrom); setShowWeekendHolidays(s.showWeekendHolidays); setBlocks(s.blocks);
+    setAutoFrom(s.autoFrom); setBlocks(s.blocks);
     setWorkingWeekdays(s.workingWeekdays);
     const o = {};
     for (const [md, val] of Object.entries(s.overridesMd || {})) o[`${s.year}:${md}`] = val;
@@ -602,7 +605,7 @@ function Urlaubsplaner({ onPlanReady }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [year, st, vac, ot, xmasRule, uiMode, simpleGoal, simpleStarted,
       schoolHolidayPreference, autoVac, autoOt, spendFirst, autoFrom,
-      showWeekendHolidays, workingWeekdays, blocks, yearOverrides, view]);
+      workingWeekdays, blocks, yearOverrides, view]);
 
   // Beim Start: geteilte Planung anwenden (bei #p= asynchron dekomprimieren),
   // Hinweis zeigen und das Fragment aus der Adresszeile entfernen (sauberes
@@ -717,20 +720,18 @@ function Urlaubsplaner({ onPlanReady }) {
   // Nur Feiertage INNERHALB der vorgeschlagenen freien Zeiträume zählen, nicht
   // das gesamte Kalenderjahr – sonst wäre die Kennzahl unabhängig davon, ob die
   // Planung diese Feiertage überhaupt nutzt. Ein Feiertag "spart" bzw. "nutzt"
-  // dabei nur dann etwas, wenn er auf einen PERSÖNLICHEN regulären Arbeitstag
-  // fällt (isWorkingDay) – ein Feiertag an einem regelmäßig freien Wochentag
-  // hätte ohnehin keinen Urlaubstag gekostet. Getrennt davon: echte
-  // Wochenendfeiertage (Sa/So) werden nur zusätzlich angezeigt (Checkbox
-  // "Feiertage an Samstag/Sonntag einbeziehen"), unabhängig vom Wochenplan –
-  // ohne die "&& !isWorkingDay"-Einschränkung würde ein Feiertag an einem
-  // persönlichen Arbeits-Samstag (z. B. Di–Sa) doppelt gezählt.
+  // dabei ausschließlich dann etwas, wenn er auf einen PERSÖNLICHEN regulären
+  // Arbeitstag fällt (isWorkingDay) – unabhängig vom kalendarischen Wochentag.
+  // Ein Feiertag an einem regelmäßig freien Tag (egal ob Mo-Fr oder Sa/So)
+  // hätte ohnehin keinen Urlaubstag gekostet und zählt daher nicht. Da
+  // result.periods bereits disjunkte, nicht überlappende Zeiträume sind (siehe
+  // js/planning.js), wird dabei kein Tag doppelt gezählt.
   const countHolidaysInPeriods = (predicate) => result.periods.reduce((sum, p) => {
     let c = 0;
     for (let k = p.s; k <= p.e; k++) if (days[k].holiday && predicate(days[k])) c++;
     return sum + c;
   }, 0);
   const periodWorkingDayHolidayCount = countHolidaysInPeriods((d) => d.isWorkingDay);
-  const periodWeekendHolidayCount = countHolidaysInPeriods((d) => d.weekend && !d.isWorkingDay);
 
   const addBlock = () => setBlocks([...blocks, { len: 9, month: "", ot: "" }]);
   const updBlock = (i, patch) => setBlocks(blocks.map((b, j) => (j === i ? { ...b, ...patch } : b)));
@@ -892,17 +893,18 @@ function Urlaubsplaner({ onPlanReady }) {
   };
 
   // Kurze Monatszusammenfassung für Feiertage und Schulferien direkt unter
-  // jeder Monatskarte. Nutzt ausschließlich vorhandene Daten (days, vacations,
-  // vacStatus, year, showWeekendHolidays) – keine neuen API-Aufrufe, keine
-  // Änderung an plan()/Kernberechnung/Share-Link/gespeicherten Daten.
+  // jeder Monatskarte. Rein kalendarische Information (keine Erfolgskennzahl):
+  // zeigt IMMER alle Feiertage des Monats, unabhängig vom persönlichen
+  // Arbeitsstatus oder Wochentag. Nutzt ausschließlich vorhandene Daten (days,
+  // vacations, vacStatus, year) – keine neuen API-Aufrufe, keine Änderung an
+  // plan()/Kernberechnung/Share-Link/gespeicherten Daten.
   // Rückgabe: { holidaysText, vacationsText } (jeweils null, wenn nichts anzuzeigen ist).
   const monthSummary = (m) => {
-    // --- Feiertage: Namen dieses Monats sammeln, deduplizieren, ggf. Wochenende ausschließen ---
+    // --- Feiertage: Namen dieses Monats sammeln, deduplizieren ---
     const holidayNames = [];
     const seenH = new Set();
     for (const d of days) {
       if (d.m !== m || !d.holiday) continue;
-      if (d.weekend && !showWeekendHolidays) continue;
       if (!seenH.has(d.holiday)) { seenH.add(d.holiday); holidayNames.push(withAssumptionDayCaveat(d.holiday, d, st)); }
     }
     let holidaysText = null;
@@ -1021,7 +1023,7 @@ function Urlaubsplaner({ onPlanReady }) {
                           }}
                           className={`relative h-7 rounded-md flex items-center justify-center text-[11px] tabular-nums select-none ${
                             clickable ? "cursor-pointer" : "cursor-default"
-                          } ${ring} ${dayClass(day, selType, showWeekendHolidays, dark)}`}>
+                          } ${ring} ${dayClass(day, selType, dark)}`}>
                           {day.d}
                           {periodInfo && (
                             /* Freier Zeitraum (result.periods): dünner mintgrüner Innenrahmen als
@@ -1568,11 +1570,6 @@ function Urlaubsplaner({ onPlanReady }) {
                     <option value="0">{t("workRules.xmasOptionNone")}</option>
                   </select>
                 </div>
-                <label className={`flex items-start gap-2 text-sm ${dark ? "text-slate-300" : "text-slate-700"}`}>
-                  <input type="checkbox" className="mt-0.5 accent-emerald-600" checked={showWeekendHolidays}
-                    onChange={(e) => setShowWeekendHolidays(e.target.checked)} />
-                  <span>{t("workRules.includeWeekendHolidays")}</span>
-                </label>
                 <div>
                   <div className="flex items-center justify-between mb-1">
                     <span className={subLabelCls}>{t("workingDays.proPanelTitle")}</span>
@@ -1723,8 +1720,7 @@ function Urlaubsplaner({ onPlanReady }) {
             {[
               { v: fmtNum(leverage), l: t("metrics.leverage") },
               { v: longest, l: t("metrics.longestStreak") },
-              { v: showWeekendHolidays ? `${periodWorkingDayHolidayCount} + ${periodWeekendHolidayCount}` : periodWorkingDayHolidayCount,
-                l: showWeekendHolidays ? t("metrics.holidaysWithWeekend") : t("metrics.holidaysWorkdaysOnly") },
+              { v: periodWorkingDayHolidayCount, l: t("metrics.holidaysWorkdaysOnly") },
               { v: `${fmtNum(result.budget.vac)} / ${fmtNum(result.budget.ot)}`, l: t("metrics.remaining") },
             ].map((s, i) => (
               <div key={i} className={`${cardCls} p-3 text-center`}>
@@ -1957,6 +1953,7 @@ function App() {
 
   const page = path === "/impressum" ? <ImpressumPage />
     : path === "/datenschutz" ? <DatenschutzPage />
+    : path === "/ueber-freilotse" ? <AboutPage />
     : <Urlaubsplaner onPlanReady={() => setPlanReady(true)} />;
 
   return (

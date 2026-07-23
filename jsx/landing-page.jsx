@@ -12,7 +12,7 @@
   "use strict";
   const { useState, useEffect } = React;
   const t = window.I18N.t;
-  const { SiteFooter } = window.FREILOTSE.ui;
+  const { SiteFooter, SiteLink } = window.FREILOTSE.ui;
 
   // Klick-Vorschau für das Erklärvideo der Landing Page: zeigt zunächst nur ein
   // YouTube-Vorschaubild mit Play-Button; der iframe (youtube-nocookie.com) wird
@@ -224,6 +224,16 @@
               ))}
             </div>
           </section>
+
+          {/* Dezenter persönlicher Teaser - bewusst zurückhaltend gestaltet (kleine,
+              gedämpfte Schrift ohne Karte/Rahmen), damit er nicht mit der
+              Modus-Auswahl weiter oben konkurriert. Verlinkt auf /ueber-freilotse. */}
+          <p className={`text-center text-xs ${mutedTextCls}`}>
+            {t("landing.aboutTeaser.text")}{" "}
+            <SiteLink to="/ueber-freilotse" className={`font-semibold hover:underline ${dark ? "text-emerald-400" : "text-emerald-600"}`}>
+              {t("landing.aboutTeaser.linkText")}
+            </SiteLink>
+          </p>
 
           {/* Vertrauenshinweise */}
           <section className={`flex flex-wrap justify-center gap-x-6 gap-y-2 text-xs ${mutedTextCls}`}>

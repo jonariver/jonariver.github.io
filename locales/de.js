@@ -180,6 +180,44 @@
           "Planung als Link teilbar",
         ],
       },
+      // Dezenter Teaser unmittelbar vor den Vertrauenshinweisen, verlinkt auf /ueber-freilotse.
+      aboutTeaser: {
+        text: "FREILOTSE ist ein unabhängiges Projekt von Jonathan.",
+        linkText: "Mehr über das Projekt",
+      },
+    },
+
+    /* ---- Seite „Über FREILOTSE" (/ueber-freilotse) ---- */
+    about: {
+      documentTitle: "Über FREILOTSE – Urlaubsplaner",
+      metaDescription: "Lerne die Person hinter FREILOTSE kennen und erfahre, wie du das unabhängige Projekt freiwillig unterstützen kannst.",
+      footerLink: "Über FREILOTSE",
+      backToPlanner: "Zum Urlaubsplaner",
+      pageTitle: "Über FREILOTSE",
+      intro: "Hallo, ich bin Jonathan.",
+      body: "Ich entwickle FREILOTSE als persönliches, unabhängiges Projekt. Die Idee entstand aus dem Wunsch nach einem Urlaubsplaner, der nicht nur Feiertage anzeigt, sondern wirklich dabei hilft, freie Zeit sinnvoll zu planen – einfach, verständlich und auch für unterschiedliche Arbeitsmodelle.",
+      values: {
+        heading: "Was mir bei FREILOTSE wichtig ist",
+        items: [
+          "Kostenlos nutzbar",
+          "Keine Registrierung erforderlich",
+          "Datensparsame und möglichst lokale Verarbeitung",
+          "Verständliche Planung statt unnötig komplizierter Bedienung",
+          "Weiterentwicklung anhand praktischer Anforderungen und Rückmeldungen",
+        ],
+      },
+      support: {
+        heading: "Freiwillig unterstützen",
+        text: "Ich entwickle und betreibe FREILOTSE selbst. Die Weiterentwicklung sowie Domain und Betrieb kosten Zeit und Geld. Wenn dir FREILOTSE bei deiner Planung geholfen hat, kannst du das Projekt freiwillig mit einem Kaffee unterstützen. Das ist selbstverständlich kein Muss – FREILOTSE bleibt auch ohne Unterstützung vollständig nutzbar.",
+        button: "☕ FREILOTSE freiwillig unterstützen",
+        buttonAriaLabel: "FREILOTSE freiwillig über Ko-fi unterstützen (öffnet in neuem Tab)",
+      },
+      // prefix/suffix umschließen den eingebetteten mailto-Link (siehe jsx/about-page.jsx) -
+      // Grund identisch zu jsx/legal-pages.jsx: locales/de.js kann kein JSX abbilden.
+      contact: {
+        prefix: "Du hast Feedback oder eine Idee für FREILOTSE? Schreib mir gerne an ",
+        suffix: ".",
+      },
     },
 
     share: {
@@ -341,7 +379,6 @@
       xmasOptionFull: "voller Urlaubstag (100 %)",
       xmasOptionHalf: "halber Urlaubstag (50 %)",
       xmasOptionNone: "frei – kein Urlaubstag (0 %)",
-      includeWeekendHolidays: "Feiertage an Samstag/Sonntag einbeziehen",
     },
 
     /* ---- Profi-Modus: Panel „Automatische Planung“ ---- */
@@ -379,10 +416,10 @@
     metrics: {
       leverage: "freie Tage pro eingesetztem Tag",
       longestStreak: "Längster zusammenhängender Zeitraum (Tage)",
-      // Bewusst ohne "Mo-Fr"/"Werktage": gilt unverändert für individuelle
-      // Arbeitswochen (siehe workingDays) – "Arbeitstage" bezieht sich auf die
-      // persönlich gewählten regulären Arbeitstage, nicht auf eine feste Woche.
-      holidaysWithWeekend: "Feiertage an Arbeits- und Wochenendtagen in deinen Zeiträumen",
+      // Bewusst ohne "Mo-Fr"/"Werktage"/"Wochenende": zählt ausschließlich nach
+      // persönlichem Arbeitsstatus (day.isWorkingDay), unabhängig vom
+      // kalendarischen Wochentag - gilt unverändert für individuelle
+      // Arbeitswochen (siehe workingDays).
       holidaysWorkdaysOnly: "Feiertage an deinen Arbeitstagen in deinen Zeiträumen",
       remaining: "übrig: Urlaub / Überstunden",
     },

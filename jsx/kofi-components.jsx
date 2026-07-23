@@ -83,14 +83,14 @@
 
     useEffect(() => {
       if (!planReady || autoShownRef.current) return;
-      if (path === "/impressum" || path === "/datenschutz") return;
+      if (path === "/impressum" || path === "/datenschutz" || path === "/ueber-freilotse") return;
       // Einmaliger 1-Minuten-Timer nach dem ersten sichtbaren Planungsergebnis;
       // sofort gesperrt, damit eine erneute Berechnung keinen zweiten Timer
       // startet.
       autoShownRef.current = true;
       delayTimerRef.current = setTimeout(() => {
         delayTimerRef.current = null;
-        if (pathRef.current === "/impressum" || pathRef.current === "/datenschutz") return;
+        if (pathRef.current === "/impressum" || pathRef.current === "/datenschutz" || pathRef.current === "/ueber-freilotse") return;
         // Auf schmalen Smartphone-Displays wird der automatische Hinweis
         // unterdrückt, da der längere Hinweistext dort Inhalte verdecken
         // könnte; Tippen öffnet Ko-fi weiterhin direkt (unverändertes
@@ -144,6 +144,7 @@
           <nav aria-label="Rechtliches und Unterstützung" className="flex flex-wrap items-center gap-x-4 gap-y-2">
             <SiteLink to="/impressum" className={hover}>Impressum</SiteLink>
             <SiteLink to="/datenschutz" className={hover}>Datenschutz</SiteLink>
+            <SiteLink to="/ueber-freilotse" className={hover}>{t("about.footerLink")}</SiteLink>
             <KofiFooterLink dark={dark} />
           </nav>
         </div>
@@ -154,6 +155,6 @@
   window.FREILOTSE = window.FREILOTSE || {};
   window.FREILOTSE.ui = window.FREILOTSE.ui || {};
   Object.assign(window.FREILOTSE.ui, {
-    internalNavigate, SiteLink, CoffeeIcon, KofiFooterLink, KofiFloatingButton, SiteFooter,
+    internalNavigate, SiteLink, CoffeeIcon, KofiFooterLink, KofiFloatingButton, SiteFooter, KOFI_URL,
   });
 })();

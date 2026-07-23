@@ -102,7 +102,7 @@
         y: s.year, st: s.st, vac: s.vac, ot: s.ot, x: s.xmasRule,
         m: s.uiMode, g: s.simpleGoal, ss: s.simpleStarted ? 1 : 0,
         sh: s.schoolHolidayPreference, av: s.autoVac, ao: s.autoOt,
-        sf: s.spendFirst, af: s.autoFrom, wh: s.showWeekendHolidays ? 1 : 0,
+        sf: s.spendFirst, af: s.autoFrom,
         b: blocks, ov,
         // Optionales Feld, rückwärtskompatibel: fehlt bei alten Links komplett,
         // decodeShare()/validateSharePayload() verwenden dann automatisch
@@ -139,7 +139,7 @@
       year: new Date().getFullYear(), st: "BY", vac: 30, ot: 0, xmasRule: "50",
       uiMode: "einfach", simpleGoal: "free", simpleStarted: false,
       schoolHolidayPreference: "neutral", autoVac: "", autoOt: "0",
-      spendFirst: "vac", autoFrom: 0, showWeekendHolidays: true, blocks: [], overridesMd: {},
+      spendFirst: "vac", autoFrom: 0, blocks: [], overridesMd: {},
       workingWeekdays: [1, 2, 3, 4, 5],
     };
     const bad = (present) => { if (present) warn = true; };
@@ -155,7 +155,11 @@
     if (SCHOOL_PREFS.includes(raw.sh)) out.schoolHolidayPreference = raw.sh; else bad(raw.sh !== undefined);
     if (SPEND_FIRST.includes(raw.sf)) out.spendFirst = raw.sf; else bad(raw.sf !== undefined);
     out.simpleStarted = raw.ss === 1 || raw.ss === true;
-    out.showWeekendHolidays = raw.wh === undefined ? true : (raw.wh === 1 || raw.wh === true);
+    // raw.wh (ehemals "Feiertage an Samstag/Sonntag einbeziehen") wird bewusst
+    // NICHT mehr gelesen: die Einstellung wurde entfernt. Ein vorhandenes
+    // raw.wh in älteren Links (Werte 0/1/false/true) bleibt als unbekanntes,
+    // stillschweigend ignoriertes Feld im Payload – löst keine Warnung aus und
+    // verhindert nicht das normale Laden der übrigen Felder.
     const af = parseInt(raw.af, 10); if (Number.isInteger(af) && af >= 0 && af <= 11) out.autoFrom = af; else bad(raw.af !== undefined);
     out.autoVac = raw.av === "" ? "" : (Number.isFinite(Number(raw.av)) && raw.av != null ? String(raw.av) : "");
     out.autoOt = Number.isFinite(Number(raw.ao)) && raw.ao != null ? String(raw.ao) : "0";

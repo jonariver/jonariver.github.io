@@ -23,14 +23,17 @@
   // locales/de.js passen (gleiche Schlüssel, gleiche Funktionssignaturen).
   const EN_TEMPLATE_NOT_ACTIVE = null;
 
-  // Einzelner, gezielt nachgetragener Schlüssel (ausdrücklich beauftragt) für
-  // die neue Kalenderlegende "Freier Zeitraum" (siehe locales/de.js,
-  // legend.freePeriod) – bewusst NUR dieser eine Schlüssel, keine vollständige
-  // Übersetzung der übrigen Datei. Rein vorbereitend: bleibt unregistriert und
-  // ohne jede Wirkung auf die Anwendung (siehe Hinweis oben), aktiviert kein
-  // Englisch und fügt keinen Sprachumschalter hinzu.
+  // Einzelne, gezielt nachgetragene Schlüssel (jeweils ausdrücklich
+  // beauftragt) – bewusst NUR diese, keine vollständige Übersetzung der
+  // übrigen Datei. Rein vorbereitend: bleibt unregistriert und ohne jede
+  // Wirkung auf die Anwendung (siehe Hinweis oben), aktiviert kein Englisch
+  // und fügt keinen Sprachumschalter hinzu.
   const EN_PARTIAL_NOT_REGISTERED = {
+    // Kalenderlegende "Freier Zeitraum" (siehe locales/de.js, legend.freePeriod)
     legend: { freePeriod: "Free period" },
+    // Feiertagskennzahl, zählt nur Feiertage an persönlichen Arbeitstagen
+    // innerhalb von result.periods (siehe locales/de.js, metrics.holidaysWorkdaysOnly)
+    metrics: { holidaysWorkdaysOnly: "Public holidays on your workdays within your periods" },
   };
   void EN_PARTIAL_NOT_REGISTERED;
 

@@ -55,6 +55,7 @@ innerhalb von `app.jsx` unverändert (keine Umbenennungen).
 | `jsx/kofi-components.jsx` | `window.FREILOTSE.ui` | `internalNavigate`, `SiteLink`, `CoffeeIcon`, `KofiFooterLink`, `KofiFloatingButton`, `SiteFooter` (Site-Chrome + Ko-fi, eng gekoppelt). |
 | `jsx/landing-page.jsx` | `window.FREILOTSE.ui` | `ExplainerVideoSection`, `LandingPage`. Nutzt `SiteFooter` aus `kofi-components.jsx`. |
 | `jsx/legal-pages.jsx` | `window.FREILOTSE.ui` | `LegalLayout`, `LegalSection`, `ExternalLegalLink`, `ProviderDetailsImage`, `ImpressumPage`, `DatenschutzPage`. Nutzt `SiteLink`/`SiteFooter` aus `kofi-components.jsx`. |
+| `jsx/about-page.jsx` | `window.FREILOTSE.ui` | `AboutPage` (Seite „Über FREILOTSE" unter `/ueber-freilotse`). Nutzt `SiteLink`/`SiteFooter`/`KOFI_URL` aus `kofi-components.jsx`. Anders als `LegalLayout` bewusst **ohne** „noindex" (soll indexierbar sein) und mit eigenem, lokalem Dark/Light-State (kein Zugriff auf den Dark-State von `Urlaubsplaner`, da eigenständig über `App()` geroutet). |
 | `app.jsx` | – (Wurzel) | `Urlaubsplaner` (zentrale Komponente, bewusst nicht weiter aufgeteilt – zu große/kritische Prop-Kette), `App` (Routing), Rendering-Helfer (`fmtNum`, `dayClass`, `dayTitle` u. Ä.), Mount (`ReactDOM.createRoot(...).render(...)`). |
 
 ### Erforderliche Ladereihenfolge (siehe `index.html`)
@@ -62,8 +63,8 @@ innerhalb von `app.jsx` unverändert (keine Umbenennungen).
 2. `js/planning.js`, `js/calendar.js`, `js/data-sources.js`, `js/share-link.js`
    (Reihenfolge untereinander unkritisch, keine Abhängigkeiten untereinander)
 3. `jsx/common-components.jsx`, dann `jsx/kofi-components.jsx` (wird von den
-   folgenden beiden genutzt), dann `jsx/landing-page.jsx` und
-   `jsx/legal-pages.jsx`
+   folgenden genutzt), dann `jsx/landing-page.jsx`, `jsx/legal-pages.jsx` und
+   `jsx/about-page.jsx` (Reihenfolge dieser drei untereinander unkritisch)
 4. `app.jsx` (mountet die Anwendung, muss zuletzt laden)
 
 Bei Änderungen an einer dieser Dateien die Cache-Busting-Version in
@@ -122,9 +123,15 @@ den von `buildDays()` bereits korrekt berechneten `cost`-Werten und kennen
 Feiertagsbezogene Kennzahlen (`countHolidaysInPeriods()`,
 `periodWorkingDayHolidayCount`, Feiertagsbeschreibungen in `blockReason()`)
 zählen einen Feiertag nur dann als „gespart"/„genutzt", wenn er auf einen
-Tag mit `isWorkingDay === true` fällt. Die Anzeige eines Feiertags (z. B. in
-der Monatszusammenfassung) bleibt davon getrennt und richtet sich weiterhin
-nach `weekend`/der Option „Feiertage an Samstag/Sonntag einbeziehen".
+Tag mit `isWorkingDay === true` fällt – unabhängig vom kalendarischen
+Wochentag (auch ein Feiertag an einem persönlichen Arbeitssamstag/-sonntag
+zählt). Die Anzeige eines Feiertags (z. B. in der Monatszusammenfassung)
+bleibt davon getrennt: `monthSummary()` zeigt unabhängig vom persönlichen
+Arbeitsstatus immer alle Feiertage des Monats (reine Kalenderinformation,
+keine Erfolgskennzahl). Die frühere Einstellung „Feiertage an
+Samstag/Sonntag einbeziehen" (State `showWeekendHolidays`) wurde ersatzlos
+entfernt, da seit `workingWeekdays` ausschließlich `isWorkingDay` und nicht
+mehr der kalendarische Wochentag über Darstellung und Kennzahl entscheidet.
 
 ### Share-Link (optional, rückwärtskompatibel)
 Kompaktes, optionales Feld `ww` in `state` (z. B. `"ww": [1,2,3,4,5]`),
@@ -172,7 +179,7 @@ Es werden **nur Eingaben** gespeichert (kompakte Kurzfelder):
     "y": 2027, "st": "BY", "vac": 30, "ot": 5, "x": "50",   // Jahr, Land, Kontingente, 24./31.12.-Regel
     "m": "profi", "g": "free", "ss": 0,                       // uiMode, simpleGoal, simpleStarted
     "sh": "avoid",                                            // Schulferien-Präferenz
-    "av": "", "ao": "0", "sf": "vac", "af": 0, "wh": 1,       // Auto-Budget/-Optionen, showWeekendHolidays
+    "av": "", "ao": "0", "sf": "vac", "af": 0,                // Auto-Budget/-Optionen
     "b": [["16","","" ],["9","",""]],                         // Wunschblöcke [len, month, ot]
     "ov": { "v": ["4-14"], "o": ["5-4"], "n": ["6-1"] },      // manuelle Tage: vac / ot / none (Keys "m-d")
     "ww": [1, 2, 3, 4, 5]                                     // optional: regelmäßige Arbeitstage, siehe unten
@@ -183,6 +190,14 @@ Es werden **nur Eingaben** gespeichert (kompakte Kurzfelder):
 `ww` (regelmäßige Arbeitstage) ist **optional** und rückwärtskompatibel –
 siehe eigener Abschnitt „Regelmäßige Arbeitstage" oben für Format,
 Validierung und das Verhalten bei alten Links ohne dieses Feld.
+
+`wh` (ehemals „Feiertage an Samstag/Sonntag einbeziehen") wird seit Entfernen
+dieser Einstellung **nicht mehr erzeugt**. Historische Links können `wh` noch
+enthalten (Werte `0`/`1`/`false`/`true`); dieses Feld wird beim Laden
+stillschweigend **ignoriert** – keine Warnung, kein Einfluss auf die übrige
+Validierung, `SHARE_VERSION` bleibt unverändert. Seit der Umstellung
+entscheidet für Feiertage ausschließlich `day.isWorkingDay` (siehe Abschnitt
+„Regelmäßige Arbeitstage"), nicht mehr der kalendarische Wochentag.
 
 Bewusst **nicht** gespeichert (weil ableitbar bzw. UI-lokal): Feiertage,
 Schulferien, `days`, das Planungsergebnis, sowie `dark`, `panels`, `clickMode`,
