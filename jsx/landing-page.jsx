@@ -48,8 +48,8 @@
     // keine Verbindung zu YouTube/Google entsteht (siehe Datenschutzerklärung,
     // Abschnitt "Eingebettete YouTube-Videos").
     const video = isMobile
-      ? { id: "N1KzGRCX7XA", ratio: "aspect-[9/16]", widthCls: "max-w-[320px] mx-auto",
-          thumbnail: "./assets/video/explainer-mobile-N1KzGRCX7XA.jpg", title: t("landing.video.mobileIframeTitle") }
+      ? { id: "gFdaoqbfvC0", ratio: "aspect-[9/16]", widthCls: "max-w-[320px] mx-auto",
+          thumbnail: "./assets/video/explainer-mobile-gFdaoqbfvC0.jpg", title: t("landing.video.mobileIframeTitle") }
       : { id: "SJr7oiPk3w8", ratio: "aspect-[16/9]", widthCls: "",
           thumbnail: "./assets/video/explainer-desktop-SJr7oiPk3w8.jpg", title: t("landing.video.desktopIframeTitle") };
     const embedUrl = `https://www.youtube-nocookie.com/embed/${video.id}?autoplay=1&playsinline=1`;
