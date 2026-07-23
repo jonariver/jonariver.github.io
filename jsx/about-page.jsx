@@ -73,10 +73,29 @@
 
         <main className="mx-auto w-full max-w-3xl flex-1 px-4 py-10">
           <article className={`${cardCls} space-y-8 p-5 sm:p-8`}>
-            <div className="space-y-3">
-              <h1 className="text-3xl font-bold tracking-tight">{t("about.pageTitle")}</h1>
-              <p className={`text-lg font-semibold ${dark ? "text-slate-200" : "text-slate-800"}`}>{t("about.intro")}</p>
-              <p className={`text-sm leading-7 ${softTextCls}`}>{t("about.body")}</p>
+            <div>
+              <h1 className="mb-4 text-3xl font-bold tracking-tight">{t("about.pageTitle")}</h1>
+              {/* Porträt: feste width/height-Attribute verhindern Layout-Shift beim
+                  Laden; die tatsächliche Anzeigegröße (112px mobil, 128px ab sm)
+                  wird über Tailwind-Klassen gesteuert (object-cover, keine Verzerrung).
+                  Mobil zentriert über dem Text, ab sm links davon, vertikal zentriert. */}
+              <div className="flex flex-col items-center gap-4 text-center sm:flex-row sm:items-center sm:gap-6 sm:text-left">
+                <img
+                  src="assets/jonathan-portrait-freilotse.png"
+                  alt={t("about.portraitAlt")}
+                  width="128"
+                  height="128"
+                  loading="eager"
+                  decoding="async"
+                  className={`h-28 w-28 shrink-0 rounded-full object-cover shadow-md sm:h-32 sm:w-32 ${
+                    dark ? "border-2 border-slate-700" : "border-2 border-slate-200"
+                  }`}
+                />
+                <div className="space-y-3">
+                  <p className={`text-lg font-semibold ${dark ? "text-slate-200" : "text-slate-800"}`}>{t("about.intro")}</p>
+                  <p className={`text-sm leading-7 ${softTextCls}`}>{t("about.body")}</p>
+                </div>
+              </div>
             </div>
 
             <section>

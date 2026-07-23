@@ -194,6 +194,7 @@
       footerLink: "Über FREILOTSE",
       backToPlanner: "Zum Urlaubsplaner",
       pageTitle: "Über FREILOTSE",
+      portraitAlt: "Jonathan, Entwickler von FREILOTSE",
       intro: "Hallo, ich bin Jonathan.",
       body: "Ich entwickle FREILOTSE als persönliches, unabhängiges Projekt. Die Idee entstand aus dem Wunsch nach einem Urlaubsplaner, der nicht nur Feiertage anzeigt, sondern wirklich dabei hilft, freie Zeit sinnvoll zu planen – einfach, verständlich und auch für unterschiedliche Arbeitsmodelle.",
       values: {
